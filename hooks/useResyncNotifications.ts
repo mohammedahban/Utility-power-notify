@@ -102,6 +102,8 @@ export interface ResyncNotification {
   reporter_timeline_alignment?: TimelineAlignment | null;
   // response state
   response?: 'yes' | 'no' | 'ignore' | null;
+  // V2.2 (G4): cloned from the reporter's report
+  following_off_duration_min?: number | null;
 }
 
 export interface ResyncHistoryEntry {
@@ -129,6 +131,8 @@ export interface ResyncHistoryEntry {
   generated_on_duration_min?: number | null;
   generated_on_reference_iso?: string | null;
   generated_on_reference_kind?: 'completed' | 'active' | null;
+  // V2.2 (G4): cloned from the reporter's report
+  following_off_duration_min?: number | null;
 }
 
 /** Returned when a YES response is confirmed */
@@ -148,6 +152,8 @@ export interface YesResyncResult {
   generatedOnDurationMin: number | null;
   generatedOnReferenceIso: string | null;
   generatedOnReferenceKind: 'completed' | 'active' | null;
+  // V2.2 (G4):
+  followingOffDurationMin: number | null;
 }
 
 /**
@@ -203,22 +209,18 @@ async function bumpReliabilityCounters(
   }
 }
 
-// ── TMMS V2.1 FINAL: Offset is computed once at report time ──────────────
+// ── TMMS V2.2: Pending Negative auto‑resolution only ─────────────────────
 //
-// PERIOD RULES (corrected per user clarification):
-//   • Period 1: first half of OFF (<50% consumed) → POSITIVE offset
-//   • Period 2: second half of OFF (>50% consumed) → NEGATIVE offset
+// PERIOD RULES (per V2.2 spec):
+//   • Period 1 (Growatt ON or <50% of following OFF)  → POSITIVE offset
+//   • Period 2 (>50% of OFF, before next ON)          → PENDING_NEGATIVE
+//   • Period 3 (exact ON start)                        → NEUTRAL (0)
 //
-// The offset state AND value are computed ONCE at report time based on which
-// Period the report falls in. They are FINAL and NEVER change — not even
-// when Growatt actually turns ON.
-//
-// `useGrowattOnWatcher` is kept for backwards compatibility but is now a
-// no-op since offsets are final at report time. No recomputation needed.
-//
-// `useGrowattOnWatcher` listens for new UTILITY_ON rows in power_events.
-// For every new ON event, it queries resync_history for recent rows and
-// recomputes their offset_value using the actual Growatt ON time.
+// V2.2 requires: only PENDING_NEGATIVE rows resolve when Growatt actually
+// turns ON. POSITIVE/NEUTRAL rows are final at report time and must NOT be
+// recomputed on Growatt ON. The watcher below therefore updates only rows
+// whose offset_state is 'PENDING_NEGATIVE' (or legacy rows with
+// offset_value='PENDING'). Other rows are ignored.
 function useGrowattOnWatcher() {
   useEffect(() => {
     const channel = supabase
@@ -263,66 +265,55 @@ async function resolveOffsetsWithGrowatt(growattOnIso: string): Promise<void> {
   const growattOnMs = new Date(growattOnIso).getTime();
   if (!Number.isFinite(growattOnMs)) return;
 
-  // V2.1 CORRECTED: resolve ALL recent rows, not just PENDING_NEGATIVE ones.
-  // The state is LOCKED — we only update the numeric offset_value.
-  // We look for rows that haven't been resolved yet (pending_resolved_at IS NULL).
-  // Also handle legacy PENDING_NEGATIVE rows that may still exist from the old logic.
+  // V2.2: resolve ONLY Pending Negative rows that are still unresolved.
   const { data: unresolvedRows, error } = await supabase
     .from('resync_history')
-    .select('id, user_id, effective_transition_at, offset_state')
-    .is('pending_resolved_at', null);
+    .select('id, user_id, effective_transition_at, offset_state, offset_value')
+    .is('pending_resolved_at', null)
+    .eq('offset_state', 'PENDING_NEGATIVE')
+    // Do not let a delayed/replayed ON event resolve reports created after it.
+    // Those reports belong to a later Growatt cycle.
+    .lte('effective_transition_at', growattOnIso);
 
   if (error || !unresolvedRows || unresolvedRows.length === 0) return;
 
-  // Recompute the offset value for each row. The STATE stays as-is (locked).
+  // Compute the numeric offset for each row. The STATE becomes NEGATIVE.
   for (const row of unresolvedRows) {
     const reportMs = new Date(row.effective_transition_at).getTime();
     if (!Number.isFinite(reportMs)) continue;
 
-    // V2.1 CORRECTED: offsetValue = T − G (not G − T)
-    // This gives: negative when T < G (electricity came before Growatt confirmed),
-    //             positive when T > G (electricity came after Growatt confirmed).
+    // V2.2: offsetValue = T − G
+    // Negative when the user's personal ON preceded Growatt ON.
     const offsetMin = Math.round((reportMs - growattOnMs) / 60_000);
-
-    // The state stays LOCKED — whatever it was (POSITIVE, NEGATIVE, or
-    // legacy PENDING_NEGATIVE). For legacy PENDING_NEGATIVE rows, update
-    // them to NEGATIVE (they should have been NEGATIVE from the start
-    // under the corrected logic).
-    const lockedState = row.offset_state === 'PENDING_NEGATIVE' ? 'NEGATIVE' : row.offset_state;
 
     await supabase
       .from('resync_history')
       .update({
-        offset_state: lockedState, // LOCKED — never changes (except legacy PENDING_NEGATIVE → NEGATIVE)
-        offset_value: offsetMin, // recomputed as T − G
-        // Keep timeline_alignment as-is — per spec, the alignment anchor
-        // doesn't change when the value is resolved.
+        offset_state: 'NEGATIVE',
+        offset_value: offsetMin, // T − G
+        // timeline_alignment stays unchanged
         pending_resolved_at: new Date().toISOString(),
       })
       .eq('id', row.id);
   }
 
-  // Also update the latest user_offsets row for each affected user so the
-  // Home Screen reads the resolved value on next mount.
+  // Update user_offsets for each affected user so the Home screen
+  // reads the resolved value on next mount.
   const userIds = [...new Set(unresolvedRows.map(r => r.user_id))];
   for (const userId of userIds) {
-    const userRows = unresolvedRows.filter(r => r.user_id === userId);
-    if (userRows.length === 0) continue;
-    // Use the LATEST resolved report for this user (newest wins).
-    const latest = userRows.sort((a, b) =>
-      new Date(b.effective_transition_at).getTime() - new Date(a.effective_transition_at).getTime(),
-    )[0];
+    const latest = unresolvedRows
+      .filter(r => r.user_id === userId)
+      .sort((a, b) => new Date(b.effective_transition_at).getTime() - new Date(a.effective_transition_at).getTime())[0];
+    if (!latest) continue;
     const reportMs = new Date(latest.effective_transition_at).getTime();
     const offsetMin = Math.round((reportMs - growattOnMs) / 60_000);
-    const lockedState = latest.offset_state === 'PENDING_NEGATIVE' ? 'NEGATIVE' : latest.offset_state;
-
     await supabase
       .from('user_offsets')
       .upsert({
         user_id: userId,
         offset_minutes: offsetMin,
-        offset_state: lockedState, // LOCKED
-        offset_value: offsetMin, // recomputed
+        offset_state: 'NEGATIVE',
+        offset_value: offsetMin,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'user_id' });
   }
@@ -387,7 +378,8 @@ export function useResyncNotifications() {
           reporter_offset_state, reporter_offset_value,
           reporter_timeline_alignment,
           generated_on_start_iso, generated_on_duration_min,
-          generated_on_reference_iso, generated_on_reference_kind
+          generated_on_reference_iso, generated_on_reference_kind,
+          following_off_duration_min
         `)
         .in('id', reportIds),
       supabase
@@ -431,6 +423,8 @@ export function useResyncNotifications() {
           reporter_offset_state: report?.reporter_offset_state ?? null,
           reporter_offset_value: report?.reporter_offset_value ?? null,
           reporter_timeline_alignment: report?.reporter_timeline_alignment ?? null,
+          // V2.2 (G4): following OFF duration from report
+          following_off_duration_min: report?.following_off_duration_min ?? null,
           response: responseMap[n.id] ?? null,
         } as ResyncNotification;
       })
@@ -605,6 +599,10 @@ export function useResyncNotifications() {
         (notif as any).generated_on_reference_iso ?? null;
       const generatedOnReferenceKind: 'completed' | 'active' | null =
         (notif as any).generated_on_reference_kind ?? null;
+      // V2.2 (G4): Clone the reporter's following OFF duration so the
+      // approver's timeline also has the correct OFF after Generated ON.
+      const followingOffDurationMin: number | null =
+        (notif as any).following_off_duration_min ?? null;
 
       // Persist to resync_history — V2.1: include the cloned offset data
       // and Generated ON metadata so the Home Screen / Schedule / Debug
@@ -627,6 +625,7 @@ export function useResyncNotifications() {
         generated_on_duration_min: generatedOnDurationMin,
         generated_on_reference_iso: generatedOnReferenceIso,
         generated_on_reference_kind: generatedOnReferenceKind,
+        following_off_duration_min: followingOffDurationMin,
       });
 
       // V2.1: also upsert the user's user_offsets row so the next
@@ -658,6 +657,7 @@ export function useResyncNotifications() {
         generatedOnDurationMin,
         generatedOnReferenceIso,
         generatedOnReferenceKind,
+        followingOffDurationMin,
       };
 
       await fetchHistory();
