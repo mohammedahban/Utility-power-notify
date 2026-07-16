@@ -19,7 +19,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { registerPushToken } from '../../lib/notifications';
 import { useResync } from '../../contexts/ResyncContext';
 import { useStatusSnapshot } from '../../hooks/useStatusSnapshot';
-import { useUserOffset } from '../../hooks/useUserOffset';
+import { useUserOffset } from '../../contexts/UserOffsetContext';
 import { useTransitionMode } from '../../hooks/useTransitionMode';
 import { useUserPredictions } from '../../hooks/useUserPredictions';
 import { AR } from '../../constants/arabic';
@@ -71,8 +71,8 @@ function ReportModal({ visible, onClose, onSubmit, submitting }: {
           <Text style={rmStyles.title}>⚡ الإبلاغ عن تشغيل الكهرباء</Text>
           <Text style={rmStyles.sub}>
             أبلغ فقط عندما تشتعل الكهرباء. النظام يتعامل مع الإطفاء تلقائياً
-            حسب التوقّعات ولا يحتاج إلى بلاغ منك. سيتم إنشاء "حالة تشغيل
-            مُولّدة" فوراً وتُحدَّث الجداول لديك ولدى من يتابعك.
+            حسب التوقّعات ولا يحتاج إلى بلاغ منك. سيتم إنشاء حالة تشغيل
+            مُولّدة فوراً وتُحدَّث الجداول لديك ولدى من يتابعك.
           </Text>
 
           {/* V2.2: ON-only info banner. Replaces the old state selector row. */}
@@ -917,7 +917,7 @@ export default function CommunityScreen() {
       // V2.2: updated copy to mention Generated ON creation.
       Alert.alert(
         AR.reportShared,
-        'تم إنشاء "حالة تشغيل مُولّدة" في خطّك الزمني وتحديث الجداول لديك ولدى من يتابعك. لا حاجة للإبلاغ عن الانطفاء — سيتولّاه النظام تلقائياً.',
+        'تم إنشاء حالة تشغيل مُولّدة في خطّك الزمني وتحديث الجداول لديك ولدى من يتابعك. لا حاجة للإبلاغ عن الانطفاء — سيتولّاه النظام تلقائياً.',
       );
     }
   }, [submitReport, applyResync, captureSnapshot, userPrediction, offset, resyncPoint]);
@@ -970,6 +970,7 @@ export default function CommunityScreen() {
         generatedOnDurationMin: yesResult.generatedOnDurationMin,
         generatedOnReferenceIso: yesResult.generatedOnReferenceIso,
         generatedOnReferenceKind: yesResult.generatedOnReferenceKind,
+        followingOffDurationMin: yesResult.followingOffDurationMin,
       } as any);
 
       // V2.2: confirmation-only copy. Per the spec, confirmation never

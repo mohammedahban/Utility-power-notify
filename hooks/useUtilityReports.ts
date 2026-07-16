@@ -320,8 +320,29 @@ interface ReporterOffsetResult {
   referenceSlot: ScheduleSlot | null;
   generatedOnDurationMin: number;
   generatedOnReferenceKind: 'completed' | 'active';
+  /** V2.2 (G4): Duration of the OFF that follows the replaced Growatt ON */
+  followingOffDurationMin: number | null;
   period: string;
   ruleReason: string;
+}
+
+// ── V2.2 (G4): Find the OFF slot that follows a given ON slot ────────────
+function findFollowingOffSlot(schedule: ScheduleSlot[], onSlot: ScheduleSlot, tMs: number): ScheduleSlot | null {
+  const onEndMs = toMs(onSlot.end, tMs);
+  if (onEndMs === null) return null;
+  let best: ScheduleSlot | null = null;
+  let bestStartMs = Infinity;
+  for (const slot of schedule) {
+    if (slot.state !== 'OFF') continue;
+    const start = toMs(slot.start, tMs);
+    if (start === null) continue;
+    // The following OFF starts at or after the ON end
+    if (start >= onEndMs && start < bestStartMs) {
+      best = slot;
+      bestStartMs = start;
+    }
+  }
+  return best;
 }
 
 function calculateReporterOffset(
@@ -339,8 +360,14 @@ function calculateReporterOffset(
     const onDuration = onSlot.durationMin || Math.round((onEndMs - onStartMs) / 60_000);
     const onStartIso = new Date(onStartMs).toISOString();
 
-    // Period 3: exact instant the Growatt ON state begins (within 1 minute tolerance)
-    if (Math.abs(transitionMs - onStartMs) < 60_000) {
+    // Period 3: exact instant the Growatt ON state begins (within 1 second tolerance)
+    // V2.2 (P1-A/P3 fix): Changed from 60s to 1s — only the exact ON-start instant is Period 3.
+    // Every later instant during the active Growatt ON is Period 1 (positive offset).
+    if (Math.abs(transitionMs - onStartMs) < 1_000) {
+      const followingOff = findFollowingOffSlot(schedule, onSlot, transitionMs);
+      const followingOffDur = followingOff
+        ? (followingOff.durationMin || Math.round((toMs(followingOff.end, transitionMs)! - toMs(followingOff.start, transitionMs)!) / 60_000))
+        : null;
       return {
         offsetState: 'NEUTRAL',
         offsetValue: 0,
@@ -349,6 +376,7 @@ function calculateReporterOffset(
         referenceSlot: onSlot,
         generatedOnDurationMin: onDuration,
         generatedOnReferenceKind: 'active',
+        followingOffDurationMin: followingOffDur,
         period: 'Period 3 (exact ON start)',
         ruleReason: `Period 3 — exact instant Growatt ON begins at ${onStartIso}. Offset = 0 → NEUTRAL. Personal Timeline = exact clone of Growatt. Generated ON replaces current ON. Duration = ${onDuration} min.`,
       };
@@ -360,6 +388,10 @@ function calculateReporterOffset(
     // report happens during an active ON slot (T > onStart).
     const offsetMin = Math.round((transitionMs - onStartMs) / 60_000);
     const offsetState: OffsetState = offsetMin > 0 ? 'POSITIVE' : offsetMin < 0 ? 'NEGATIVE' : 'NEUTRAL';
+    const followingOffDur2 = (() => {
+      const fo = findFollowingOffSlot(schedule, onSlot, transitionMs);
+      return fo ? (fo.durationMin || Math.round((toMs(fo.end, transitionMs)! - toMs(fo.start, transitionMs)!) / 60_000)) : null;
+    })();
 
     return {
       offsetState,
@@ -369,6 +401,7 @@ function calculateReporterOffset(
       referenceSlot: onSlot,
       generatedOnDurationMin: onDuration,
       generatedOnReferenceKind: 'active',
+      followingOffDurationMin: followingOffDur2,
       period: 'Period 1 (during Growatt ON)',
       ruleReason: `Period 1 — report during Growatt ON (${onStartIso} → ${new Date(onEndMs).toISOString()}). Offset = T - currentOnStart = ${offsetMin > 0 ? '+' : ''}${offsetMin} min → ${offsetState}. Generated ON replaces current ON. Duration = ${onDuration} min.`,
     };
@@ -399,6 +432,8 @@ function calculateReporterOffset(
 
     // Offset = T - prevOnStart  (always positive: T is during the OFF that follows)
     const offsetMin = Math.round((transitionMs - prevOnStartMs) / 60_000);
+    // V2.2 (G4): The following OFF is the current OFF slot (the one we're in during this report)
+    const followingOffDur3 = offSlot.durationMin || Math.round((toMs(offSlot.end, transitionMs)! - toMs(offSlot.start, transitionMs)!) / 60_000);
 
     return {
       offsetState: 'POSITIVE',
@@ -408,6 +443,7 @@ function calculateReporterOffset(
       referenceSlot: prevOn,
       generatedOnDurationMin: prevOnDuration,
       generatedOnReferenceKind: 'completed',
+      followingOffDurationMin: followingOffDur3,
       period: 'Period 1 (<50% of OFF)',
       ruleReason: `Period 1 (<50% of OFF consumed, progress=${Math.round(offProg.progress)}%). Offset = T - prevOnStart = ${offsetMin > 0 ? '+' : ''}${offsetMin} min → POSITIVE. Generated ON replaces prev ON (${prevOnStartIso} → ${new Date(prevOnEndMs).toISOString()}). Duration = ${prevOnDuration} min.`,
     };
@@ -430,6 +466,11 @@ function calculateReporterOffset(
     const nextOnEndMs = toMs(nextOn.end, transitionMs)!;
     const nextOnStartIso = new Date(nextOnStartMs).toISOString();
     const nextOnDuration = nextOn.durationMin || Math.round((nextOnEndMs - nextOnStartMs) / 60_000);
+    // V2.2 (G4): Find the OFF that follows the next ON
+    const followingOffDur4 = (() => {
+      const fo = findFollowingOffSlot(schedule, nextOn, transitionMs);
+      return fo ? (fo.durationMin || Math.round((toMs(fo.end, transitionMs)! - toMs(fo.start, transitionMs)!) / 60_000)) : null;
+    })();
 
     return {
       offsetState: 'PENDING_NEGATIVE',
@@ -439,6 +480,7 @@ function calculateReporterOffset(
       referenceSlot: nextOn,
       generatedOnDurationMin: nextOnDuration,
       generatedOnReferenceKind: 'active',
+      followingOffDurationMin: followingOffDur4,
       period: 'Period 2 (>50% of OFF)',
       ruleReason: `Period 2 (>50% of OFF consumed, progress=${Math.round(offProg.progress)}%). Generated ON replaces NEXT ON (${nextOnStartIso} → ${new Date(nextOnEndMs).toISOString()}). Duration = ${nextOnDuration} min. PENDING_NEGATIVE — will resolve immediately if Growatt is already ON, otherwise waits for Growatt ON.`,
     };
@@ -623,6 +665,10 @@ export function useUtilityReports() {
     const generatedOnReferenceKind: 'completed' | 'active' | null = v22Offset && !('error' in v22Offset)
       ? v22Offset.generatedOnReferenceKind
       : null;
+    // V2.2 (G4): Capture the duration of the OFF that follows the replaced Growatt ON
+    const followingOffDurationMin: number | null = v22Offset && !('error' in v22Offset)
+      ? v22Offset.followingOffDurationMin
+      : null;
 
     // ── V2.3 (Issue 1A, part 2): Resolve PENDING_NEGATIVE immediately ────────
     // If the report was classified as PENDING_NEGATIVE (Period 2), the
@@ -721,13 +767,13 @@ export function useUtilityReports() {
           return { reportId: null, selfResync: null, error: retryError.message };
         }
         const retryReportId = retryData?.id ?? null;
-        return finishSubmission(retryReportId, estimatedTransitionAt, nowMs, offsetState, offsetValue, timelineAlignment, generatedOnDurationMin, generatedOnReferenceIso, generatedOnReferenceKind, reportedState);
+        return finishSubmission(retryReportId, estimatedTransitionAt, nowMs, offsetState, offsetValue, timelineAlignment, generatedOnDurationMin, generatedOnReferenceIso, generatedOnReferenceKind, followingOffDurationMin, reportedState);
       }
       return { reportId: null, selfResync: null, error: error.message };
     }
 
     const reportId = data?.id ?? null;
-    return finishSubmission(reportId, estimatedTransitionAt, nowMs, offsetState, offsetValue, timelineAlignment, generatedOnDurationMin, generatedOnReferenceIso, generatedOnReferenceKind, reportedState);
+    return finishSubmission(reportId, estimatedTransitionAt, nowMs, offsetState, offsetValue, timelineAlignment, generatedOnDurationMin, generatedOnReferenceIso, generatedOnReferenceKind, followingOffDurationMin, reportedState);
 
     // ── Helper: finish the submission ───────────────────────────────────────
     async function finishSubmission(
@@ -740,6 +786,7 @@ export function useUtilityReports() {
       generatedOnDurationMin: number | null,
       generatedOnReferenceIso: string | null,
       generatedOnReferenceKind: 'completed' | 'active' | null,
+      followingOffDurationMin: number | null,
       reportedState: ReportedState,
     ): Promise<{ reportId: number | null; selfResync: ResyncPoint | null; error: string | null }> {
       // Save submission time & start cooldown
@@ -773,6 +820,7 @@ export function useUtilityReports() {
         generatedOnDurationMin,
         generatedOnReferenceIso,
         generatedOnReferenceKind: generatedOnReferenceKind ?? 'completed',
+        followingOffDurationMin,
         confirmationTime: estimatedTransitionAt,
       };
 
@@ -794,6 +842,8 @@ export function useUtilityReports() {
         generated_on_duration_min: generatedOnDurationMin,
         generated_on_reference_iso: generatedOnReferenceIso,
         generated_on_reference_kind: generatedOnReferenceKind ?? 'completed',
+        // V2.2 (G4):
+        following_off_duration_min: followingOffDurationMin,
       }).then(({ error: histErr }) => {
         if (histErr) {
           console.warn('[useUtilityReports] history insert error:', histErr.message);

@@ -3,7 +3,7 @@ import {
   View, Text, ScrollView, StyleSheet, Animated, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useUserOffset } from '../../hooks/useUserOffset';
+import { useUserOffset } from '../../contexts/UserOffsetContext';
 import { useUserPredictions, ShiftedScheduleSlot, ScheduleStateMode } from '../../hooks/useUserPredictions';
 import { useTransitionMode } from '../../hooks/useTransitionMode';
 import { useResyncNotifications } from '../../hooks/useResyncNotifications';
@@ -168,7 +168,7 @@ function ScheduleBlock({ slot, index, resyncEvents, isActive, atcMode, isHolding
               <Text style={{ fontWeight: '700' }}>{resyncMatch.reporter_username ?? 'جار'}</Text>
               {' '}في{' '}
               {new Date(resyncMatch.effective_transition_at).toLocaleString('ar-SA', {
-                timeZone: 'Asia/Aden', hour: '2-digit', minute: '2-digit',
+                timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
               })}
             </Text>
           </View>
@@ -492,9 +492,9 @@ export default function ScheduleScreen() {
             // For isReconciledFlip, this is reconciledCycleStartIso (the backdated start).
             let activeStartFormatted: string | undefined;
             if (isActive && mathematicalActiveStartIso) {
-              activeStartFormatted = new Date(mathematicalActiveStartIso).toLocaleString('en-US', {
+              activeStartFormatted = new Date(mathematicalActiveStartIso).toLocaleString('ar-SA', {
                 timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
-              }).replace('AM', ' ص').replace('PM', ' م');
+              });
             }
 
             const currentFormatted = activeStartFormatted ?? slot.shiftedStartFormatted ?? slot.startFormatted;
@@ -593,8 +593,8 @@ export default function ScheduleScreen() {
         <Text style={styles.computedAt}>
           {AR.computedAt}{' '}
           {new Date(userPrediction.computedAt).toLocaleString('ar-SA', {
-            timeZone: 'Asia/Aden', dateStyle: 'medium', timeStyle: 'short',
-          })} (اليمن)
+            timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
+          })}
         </Text>
       )}
     </ScrollView>

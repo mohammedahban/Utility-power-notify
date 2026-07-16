@@ -798,7 +798,7 @@ export default function AccuracyScreen() {
         <View style={{ flex: 1 }}>
           <Text style={bfStyles.title}>📊 استرجاع وتصدير</Text>
           <Text style={bfStyles.sub}>
-            "استرجاع" يملأ السجلات المفقودة من آخر 30 يوماً. "تنزيل" يصدّر التحليل كملف JSON للمشاركة مع AI.
+            استرجاع يملأ السجلات المفقودة من آخر 30 يوماً. تنزيل يصدّر التحليل كملف JSON للمشاركة مع AI.
           </Text>
           {backfillResult ? (
             <Text style={[bfStyles.result, { color: backfillResult.inserted > 0 ? T.success : T.textMuted }]}>
@@ -833,7 +833,7 @@ export default function AccuracyScreen() {
         <View style={styles.emptyBox}>
           <Text style={styles.emptyIcon}>📊</Text>
           <Text style={styles.emptyTitle}>لا توجد بيانات دقة بعد</Text>
-          <Text style={styles.emptySub}>اضغط "استرجاع" أعلاه لتعبئة السجلات من أحداث الكهرباء السابقة، أو انتظر حتى يكتشف Growatt تغيّراً جديداً.</Text>
+          <Text style={styles.emptySub}>اضغط استرجاع أعلاه لتعبئة السجلات من أحداث الكهرباء السابقة، أو انتظر حتى يكتشف Growatt تغيّراً جديداً.</Text>
         </View>
       ) : (
         <>
