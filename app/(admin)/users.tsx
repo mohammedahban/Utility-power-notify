@@ -253,7 +253,7 @@ export default function UsersAnalyticsScreen() {
           <Text style={styles.emptyIcon}>📊</Text>
           <Text style={styles.emptyTitle}>لا توجد لقطة بعد</Text>
           <Text style={styles.emptySub}>
-            اضغط احتساب الآن لتوليد أول لقطة يومية، أو انتظر الجدولة التلقائية عند الساعة 6 صباحاً.
+            اضغط "احتساب الآن" لتوليد أول لقطة يومية، أو انتظر الجدولة التلقائية عند الساعة 6 صباحاً.
           </Text>
           <TouchableOpacity
             style={[styles.computeBtn, computing && { opacity: 0.6 }, { marginTop: 20 }]}

@@ -1,8 +1,7 @@
 
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator, Animated,
-  TouchableOpacity,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
@@ -25,59 +24,38 @@ interface PowerEvent {
   durationLabel?: string;
 }
 
-function usePowerEventsHistory() {
-  const PAGE = 25;
+function usePowerEventsHistory(limit = 25) {
   const [events, setEvents] = useState<PowerEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-
-  const loadPage = useCallback(async (offset: number, append: boolean) => {
-    const { data } = await supabase
+  useEffect(() => {
+    let cancelled = false;
+    supabase
       .from('power_events')
       .select('id, event_type, occurred_at')
       .order('occurred_at', { ascending: false })
-      .range(offset, offset + PAGE);
-
-    if (!data || data.length === 0) {
-      if (!append) setEvents([]);
-      setHasMore(false);
-      setLoading(false);
-      setLoadingMore(false);
-      return;
-    }
-
-    setHasMore(data.length > PAGE);
-
-    const batch = data.slice(0, PAGE).map((ev: any, i: number) => {
-      const endEv = data[i - 1];
-      let durationLabel: string | undefined;
-      if (endEv) {
-        const durMin = Math.round(Math.abs(
-          new Date(endEv.occurred_at).getTime() - new Date(ev.occurred_at).getTime()
-        ) / 60_000);
-        const h = Math.floor(durMin / 60); const m = durMin % 60;
-        if (h === 0) durationLabel = `${m} دقيقة`;
-        else if (m === 0) durationLabel = h === 1 ? 'ساعة' : h === 2 ? 'ساعتان' : `${h} ساعات`;
-        else durationLabel = `${h}س ${m}د`;
-      }
-      return { ...ev, durationLabel };
-    });
-
-    setEvents(prev => append ? [...prev, ...batch] : batch);
-    setLoading(false);
-    setLoadingMore(false);
-  }, []);
-
-  useEffect(() => { loadPage(0, false); }, [loadPage]);
-
-  const loadMore = useCallback(() => {
-    if (loadingMore || !hasMore) return;
-    setLoadingMore(true);
-    loadPage(events.length, true);
-  }, [loadingMore, hasMore, events.length, loadPage]);
-
-  return { events, loading, loadingMore, hasMore, loadMore };
+      .limit(limit + 1)
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        const withDuration: PowerEvent[] = data.slice(0, limit).map((ev: any, i: number) => {
+          const endEv = data[i - 1];
+          let durationLabel: string | undefined;
+          if (endEv) {
+            const endMs = new Date(endEv.occurred_at).getTime();
+            const startMs = new Date(ev.occurred_at).getTime();
+            const durMin = Math.round(Math.abs(endMs - startMs) / 60_000);
+            const h = Math.floor(durMin / 60); const m = durMin % 60;
+            if (h === 0) durationLabel = `${m} دقيقة`;
+            else if (m === 0) durationLabel = h === 1 ? 'ساعة' : h === 2 ? 'ساعتان' : `${h} ساعات`;
+            else durationLabel = `${h}س ${m}د`;
+          }
+          return { ...ev, durationLabel };
+        });
+        setEvents(withDuration);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [limit]);
+  return { events, loading };
 }
 
 function fmtEventTime(iso: string): string {
@@ -88,7 +66,7 @@ function fmtEventTime(iso: string): string {
 }
 
 function EventsHistorySection() {
-  const { events, loading, loadingMore, hasMore, loadMore } = usePowerEventsHistory();
+  const { events, loading } = usePowerEventsHistory(25);
   return (
     <View style={ehStyles.container}>
       <Text style={ehStyles.sectionTitle}>📋 سجل الأحداث الفعلية</Text>
@@ -98,49 +76,33 @@ function EventsHistorySection() {
       ) : events.length === 0 ? (
         <Text style={ehStyles.emptyText}>لا توجد أحداث مسجَّلة بعد</Text>
       ) : (
-        <>
-          {events.map((ev, i) => {
-            const isOn = ev.event_type === 'UTILITY_ON';
-            const color = isOn ? T.success : T.danger;
-            const icon = isOn ? '⚡' : '🔴';
-            const label = isOn ? 'اشتغلت الكهرباء' : 'طفت الكهرباء';
-            return (
-              <View key={ev.id} style={[ehStyles.row, i < events.length - 1 && ehStyles.rowBorder]}>
-                <View style={ehStyles.badgeCol}>
-                  {ev.durationLabel ? (
-                    <View style={[ehStyles.durBadge, { borderColor: color + '44', backgroundColor: color + '10' }]}>
-                      <Text style={[ehStyles.durBadgeText, { color }]}>{ev.durationLabel}</Text>
-                      <Text style={ehStyles.durBadgeSub}>مدة</Text>
-                    </View>
-                  ) : (
-                    <View style={[ehStyles.durBadge, { borderColor: T.border, backgroundColor: T.elevated }]}>
-                      <Text style={[ehStyles.durBadgeText, { color: T.textMuted }]}>—</Text>
-                    </View>
-                  )}
-                </View>
-                <View style={ehStyles.details}>
-                  <Text style={[ehStyles.eventLabel, { color }]}>{icon} {label}</Text>
-                  <Text style={ehStyles.eventTime}>{fmtEventTime(ev.occurred_at)}</Text>
-                </View>
-                <View style={[ehStyles.colorBar, { backgroundColor: color }]} />
+        events.map((ev, i) => {
+          const isOn = ev.event_type === 'UTILITY_ON';
+          const color = isOn ? T.success : T.danger;
+          const icon = isOn ? '⚡' : '🔴';
+          const label = isOn ? 'اشتغلت الكهرباء' : 'طفت الكهرباء';
+          return (
+            <View key={ev.id} style={[ehStyles.row, i < events.length - 1 && ehStyles.rowBorder]}>
+              <View style={ehStyles.badgeCol}>
+                {ev.durationLabel ? (
+                  <View style={[ehStyles.durBadge, { borderColor: color + '44', backgroundColor: color + '10' }]}>
+                    <Text style={[ehStyles.durBadgeText, { color }]}>{ev.durationLabel}</Text>
+                    <Text style={ehStyles.durBadgeSub}>مدة</Text>
+                  </View>
+                ) : (
+                  <View style={[ehStyles.durBadge, { borderColor: T.border, backgroundColor: T.elevated }]}>
+                    <Text style={[ehStyles.durBadgeText, { color: T.textMuted }]}>—</Text>
+                  </View>
+                )}
               </View>
-            );
-          })}
-          {hasMore && (
-            <TouchableOpacity
-              style={ehStyles.loadMoreBtn}
-              onPress={loadMore}
-              activeOpacity={0.7}
-              disabled={loadingMore}
-            >
-              {loadingMore ? (
-                <ActivityIndicator color={T.accent} size="small" />
-              ) : (
-                <Text style={ehStyles.loadMoreText}>عرض المزيد</Text>
-              )}
-            </TouchableOpacity>
-          )}
-        </>
+              <View style={ehStyles.details}>
+                <Text style={[ehStyles.eventLabel, { color }]}>{icon} {label}</Text>
+                <Text style={ehStyles.eventTime}>{fmtEventTime(ev.occurred_at)}</Text>
+              </View>
+              <View style={[ehStyles.colorBar, { backgroundColor: color }]} />
+            </View>
+          );
+        })
       )}
     </View>
   );
@@ -164,11 +126,6 @@ const ehStyles = StyleSheet.create({
   durBadge: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 6, borderWidth: 1, alignItems: 'center', minWidth: 58 },
   durBadgeText: { fontSize: 13, fontWeight: '800', textAlign: 'center' },
   durBadgeSub: { color: T.textMuted, fontSize: 8, fontWeight: '600', marginTop: 2, letterSpacing: 1 },
-  loadMoreBtn: {
-    alignItems: 'center', paddingVertical: 14, marginTop: 4,
-    borderRadius: 12, backgroundColor: T.elevated, borderWidth: 1, borderColor: T.border,
-  },
-  loadMoreText: { color: T.accent, fontSize: 13, fontWeight: '700' },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

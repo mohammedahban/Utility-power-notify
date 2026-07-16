@@ -171,14 +171,13 @@ function ATCSystemIndicator({ prediction }: { prediction: Prediction | null }) {
   const samplePos = applyOffsetToPrediction(prediction, 45, null);
 
   const modeColors: Record<ScheduleStateMode, string> = {
-  NORMAL: '#34d399',
-  PREDICTION_RANGE: '#60bebe',
-  UNCERTAIN_ZONE: '#fbbf24',
-  COMMUNITY_SYNCED: '#a5b4fc',
-  WAITING_FOR_GROWATT: '#f8fafc',
-  GRACE_MODE: '#cbd5e1',
-  POSITIVE_OFFSET_PENDING: '#f56565',
-};
+    NORMAL: '#22c55e',
+    PREDICTION_RANGE: '#38bdf8',
+    UNCERTAIN_ZONE: '#f59e0b',
+    COMMUNITY_SYNCED: '#a78bfa',
+    WAITING_FOR_GROWATT: '#3b82f6',
+    GRACE_MODE: '#f97316',
+  };
   const modeIcons: Record<ScheduleStateMode, string> = {
     NORMAL: '✅',
     PREDICTION_RANGE: '🔮',

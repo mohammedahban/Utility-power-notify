@@ -47,8 +47,6 @@ export interface OffsetRow {
   id?: number;
   user_id: string;
   offset_minutes: number;
-  offset_state?: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' | 'PENDING_NEGATIVE';
-  offset_value?: number | 'PENDING';
   created_at?: string;
 }
 
@@ -66,7 +64,6 @@ export function useUserOffset() {
 
   useEffect(() => {
     if (!user) { setOffset(null); return; }
-    let cancelled = false;
     (async () => {
       setLoading(true);
       const { data } = await supabase
@@ -74,42 +71,9 @@ export function useUserOffset() {
         .select('*')
         .eq('user_id', user.id)
         .maybeSingle();
-      if (!cancelled && data) setOffset(data as OffsetRow);
-      if (!cancelled) setLoading(false);
+      if (data) setOffset(data);
+      setLoading(false);
     })();
-
-    // Pending-negative resolution is written by the Growatt watcher. Keep the
-    // operative scheduling offset in sync without requiring an app restart.
-    const channel = supabase
-      .channel(`user_offset_${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'user_offsets',
-          filter: `user_id=eq.${user.id}`,
-        },
-        payload => {
-          if (payload.eventType === 'DELETE') {
-            setOffset(null);
-            return;
-          }
-          setOffset(payload.new as OffsetRow);
-        },
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('[useUserOffset] Realtime channel subscribed');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error('[useUserOffset] Realtime channel error');
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      supabase.removeChannel(channel);
-    };
   }, [user]);
 
   /**

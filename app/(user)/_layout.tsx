@@ -8,8 +8,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useResyncNotifications } from '../../hooks/useResyncNotifications';
 import { useUtilityReports, TimeOption } from '../../hooks/useUtilityReports';
+import { useUserOffset } from '../../hooks/useUserOffset';
 import { useResync } from '../../contexts/ResyncContext';
-import { UserOffsetProvider } from '../../contexts/UserOffsetContext';
 import { AR } from '../../constants/arabic';
 
 const TIME_OPTS: { key: TimeOption; label: string }[] = [
@@ -182,9 +182,8 @@ export default function UserLayout() {
   const fabBottom = insets.bottom + 80;
 
   return (
-    <UserOffsetProvider>
-      <View style={{ flex: 1 }}>
-        <GlobalReportModal
+    <View style={{ flex: 1 }}>
+      <GlobalReportModal
         visible={reportModalVisible}
         onClose={() => setReportModalVisible(false)}
         onSubmit={handleReport}
@@ -276,8 +275,7 @@ export default function UserLayout() {
           }}
         />
       </Tabs>
-      </View>
-    </UserOffsetProvider>
+    </View>
   );
 }
 

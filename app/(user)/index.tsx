@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserOffset } from '../../contexts/UserOffsetContext';
+import { useUserOffset } from '../../hooks/useUserOffset';
 import { useTransitionMode } from '../../hooks/useTransitionMode';
 import { useUserPredictions, UserPrediction, ScheduleStateMode } from '../../hooks/useUserPredictions';
 import { useResyncNotifications } from '../../hooks/useResyncNotifications';
@@ -36,23 +36,6 @@ function translateCrisisReason(reason: string): string {
   r = r.replace(/ON durations decreased by (\d+)% vs baseline/, 'مدد التشغيل انخفضت بنسبة $1% مقارنةً بالأساس');
   r = r.replace(/possible generator capacity issue/, 'ربما بسبب مشكلة في سعة المولد');
   return r;
-}
-
-// Safe locale string helper for JSC compatibility
-function safeToLocaleString(iso: string | null | undefined, options: Intl.DateTimeFormatOptions): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  try {
-    return d.toLocaleString('ar-SA', options);
-  } catch {
-    // Fallback for JSC builds with incomplete Intl support
-    const hours = d.getHours();
-    const minutes = d.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'م' : 'ص';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${minutes} ${ampm}`;
-  }
 }
 
 function fmtOverrunAr(min: number): string {
@@ -211,22 +194,8 @@ function fmtTimeAr(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  // Use Arabic locale with only time, no date - wrapped in try/catch for JSC compatibility
-  try {
-    return d.toLocaleString('ar-SA', {
-      timeZone: 'Asia/Aden',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    // Fallback for JSC builds with incomplete Intl support
-    const hours = d.getHours();
-    const minutes = d.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'م' : 'ص';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${minutes} ${ampm}`;
-  }
+  const raw = d.toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  return raw.replace('AM', 'ص').replace('PM', 'م');
 }
 
 const HOUR_WORDS_AR = ['', 'ساعة', 'ساعتان', 'ثلاث ساعات', 'أربع ساعات', 'خمس ساعات', 'ست ساعات', 'سبع ساعات', 'ثماني ساعات', 'تسع ساعات', 'عشر ساعات'];
@@ -261,9 +230,9 @@ function GeneratedOnBanner({ prediction }: { prediction: UserPrediction | null }
   const genOn = prediction?.generatedOnInfo;
   if (!genOn || !prediction?.isGeneratedOnCurrent) return null;
   const color = T.success;
-  const startTime = safeToLocaleString(genOn.startIso, { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  const startTime = new Date(genOn.startIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
   const durationLabel = genOn.durationMin >= 60 ? `${Math.floor(genOn.durationMin / 60)}س ${genOn.durationMin % 60}د` : `${genOn.durationMin}د`;
-  const refTime = safeToLocaleString(genOn.referenceIso, { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  const refTime = new Date(genOn.referenceIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
   return (
     <View style={goStyles.banner}>
       <View style={goStyles.iconWrap}><Text style={{ fontSize: 22 }}>⚡</Text></View>
@@ -291,12 +260,12 @@ const goStyles = StyleSheet.create({
 function PendingNegativeBanner({ prediction }: { prediction: UserPrediction | null }) {
   const isPending = prediction?.isPendingNegative ?? false;
   const resolutionIso = prediction?.pendingNegativeResolutionIso ?? null;
+  if (!isPending) return null;
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
-  if (!isPending) return null;
   let countdownLabel = 'بانتظار تحوّل Growatt القادم';
   if (resolutionIso) {
     const ms = new Date(resolutionIso).getTime() - Date.now();
@@ -315,7 +284,7 @@ function PendingNegativeBanner({ prediction }: { prediction: UserPrediction | nu
           <Text style={pn2Styles.countdownLabel}>توقّع الحل:</Text>
           <Text style={pn2Styles.countdownValue}>{countdownLabel}</Text>
         </View>
-        <Text style={pn2Styles.note}>⚠ تنبؤات التشغيل القادمة تُعرض كـ تقديري (فارق معلّق) حتى يُحلّ الفارق.</Text>
+        <Text style={pn2Styles.note}>⚠ تنبؤات التشغيل القادمة تُعرض كـ "تقديري (فارق معلّق)" حتى يُحلّ الفارق.</Text>
       </View>
     </View>
   );
@@ -377,7 +346,7 @@ function PositiveOffsetPendingBanner({ prediction }: { prediction: UserPredictio
   const progressPct = totalDurationMs > 0 ? Math.min(1, elapsedMs / totalDurationMs) : 0;
   const isOn = prediction?.currentState === 'ON';
   const nextStateLabel = isOn ? 'طافية' : 'شغالة'; const nextStateEmoji = isOn ? '🔴' : '⚡';
-  const scheduledTimeLabel = safeToLocaleString(scheduledIso, { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  const scheduledTimeLabel = new Date(scheduledIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', 'ص').replace('PM', 'م');
   return (
     <View style={popStyles.banner}>
       <View style={popStyles.iconWrap}><Text style={{ fontSize: 22 }}>⏰</Text></View>
@@ -549,25 +518,25 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
     </View>
   ) : null;
 
-  const ReasoningBlock = reasoningLine ? (
-    <View style={psStyles.reasoningBox}><Text style={psStyles.reasoningText}>💡 {reasoningLine}</Text></View>
-  ) : null;
-
   const DurationsBlock = (prediction?.expectedOnDurationLabel || prediction?.expectedOffDurationLabel) ? (
     <View style={psStyles.durRow}>
       {prediction?.expectedOnDurationLabel ? (
         <View style={[psStyles.durChip, { borderColor: T.success + '44' }]}>
-          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً تستمر الكهرباء:</Text><Text style={[psStyles.durChipValue, { color: T.success }]}>{prediction.expectedOnDurationLabel}</Text></View>
+          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً تستمر الكهرباء:</Text><Text style={[psStyles.durChipValue, { color: T.success }]}>{durationWordsAr(prediction.expectedOnDurationLabel)}</Text></View>
           <Text style={psStyles.durChipIcon}>🟢</Text>
         </View>
       ) : null}
       {prediction?.expectedOffDurationLabel ? (
         <View style={[psStyles.durChip, { borderColor: T.danger + '44' }]}>
-          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً يستمر الانقطاع:</Text><Text style={[psStyles.durChipValue, { color: T.danger }]}>{prediction.expectedOffDurationLabel}</Text></View>
+          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً يستمر الانقطاع:</Text><Text style={[psStyles.durChipValue, { color: T.danger }]}>{durationWordsAr(prediction.expectedOffDurationLabel)}</Text></View>
           <Text style={psStyles.durChipIcon}>🔴</Text>
         </View>
       ) : null}
     </View>
+  ) : null;
+
+  const ReasoningBlock = reasoningLine ? (
+    <View style={psStyles.reasoningBox}><Text style={psStyles.reasoningText}>💡 {reasoningLine}</Text></View>
   ) : null;
 
   if (atcMode === 'COMMUNITY_SYNCED') {
@@ -602,8 +571,7 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
           {elapsed ? (<View style={psStyles.timeBlock}><Text style={psStyles.timeLabel}>منذ:</Text><Text style={[psStyles.timeValue, { color: color + 'cc' }]}>{elapsed}</Text></View>) : null}
           {remainLabel ? (<View style={[psStyles.timeBlock, { borderColor: color + '30', borderWidth: 1 }]}><Text style={psStyles.timeLabel}>الوقت المتوقع المتبقي:</Text><Text style={[psStyles.timeValue, { color }]}>{remainLabel}</Text></View>) : null}
         </View>
-        {ReasoningBlock}
-        {DurationsBlock}
+        {DurationsBlock}{ReasoningBlock}
       </View>
     );
   }
@@ -667,8 +635,7 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
           </View>
         );
       })()}
-      {ReasoningBlock}
-      {DurationsBlock}
+      {DurationsBlock}{ReasoningBlock}
     </View>
   );
 }
@@ -778,9 +745,9 @@ function UpcomingTransitionCard({ prediction }: { prediction: UserPrediction | n
         {effectiveNt && (
           <View style={utStyles.rangeBox}>
             <Text style={[utStyles.rangeBoxLabel, { color: isCurrentOn ? T.danger : T.success }]}>{effectiveNt.type === 'UTILITY_ON' ? 'من المتوقع أن تشتغل الكهرباء بين:' : 'من المتوقع أن تنطفئ الكهرباء بين:'}</Text>
-            <View style={utStyles.rangeTimeStack}>
+            <View style={utStyles.rangeTimeStack} dir="ltr">
               <Text style={[utStyles.rangeTime, { color: isCurrentOn ? T.danger : T.success }]}>{fmtTimeAr(effectiveNt.rangeStartIso) || (effectiveNt as any).earliestFormatted || '—'}</Text>
-              {effectiveNt.rangeStartIso !== effectiveNt.rangeEndIso && (<><Text style={utStyles.rangeSep}>&#x644;</Text><Text style={[utStyles.rangeTime, { color: isCurrentOn ? T.danger : T.success }]}>{fmtTimeAr(effectiveNt.rangeEndIso) || (effectiveNt as any).latestFormatted || '&mdash;'}</Text></>)}
+              {effectiveNt.rangeStartIso !== effectiveNt.rangeEndIso && (<><Text style={utStyles.rangeSep}>و</Text><Text style={[utStyles.rangeTime, { color: isCurrentOn ? T.danger : T.success }]}>{fmtTimeAr(effectiveNt.rangeEndIso) || (effectiveNt as any).latestFormatted || '—'}</Text></>)}
             </View>
           </View>
         )}
@@ -823,18 +790,18 @@ function UpcomingTransitionCard({ prediction }: { prediction: UserPrediction | n
           <Text style={[utStyles.rangeWindowSub, { color: color + 'aa' }]}>قد يحدث التغيير في أي لحظة</Text>
         </View>
       )}
-      <View style={utStyles.rangeBox}>
+      <View style={[utStyles.rangeBox, { borderColor: color + '25' }]}>
         <Text style={[utStyles.rangeBoxLabel, { color }]}>{isNextOn ? 'من المتوقع أن تشتغل الكهرباء بين:' : 'من المتوقع أن تنطفئ الكهرباء بين:'}</Text>
-        <View style={utStyles.rangeTimeStack}>
+        <View style={utStyles.rangeTimeStack} dir="ltr">
           <Text style={[utStyles.rangeTime, { color }]}>{fmtTimeAr(nt.rangeStartIso) || (nt as any).earliestFormatted || '—'}</Text>
           <Text style={[utStyles.rangeSep, { color: color + '88' }]}>و</Text>
           <Text style={[utStyles.rangeTime, { color }]}>{fmtTimeAr(nt.rangeEndIso) || (nt as any).latestFormatted || '—'}</Text>
         </View>
       </View>
       {!nt.inRangeWindow && (
-              <View style={utStyles.countdownSection}>
-                <Text style={utStyles.countdownLabel}>⏳ يبدأ نطاق التوقع بعد</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 10 }}>
+        <View style={utStyles.countdownSection}>
+          <Text style={utStyles.countdownLabel}>⏳ يبدأ نطاق التوقع بعد</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 10 }}>
             {h > 0 && (<><View style={utStyles.cdUnit}><Text style={[utStyles.cdVal, { color }]}>{String(h).padStart(2, '0')}</Text><Text style={utStyles.cdSub}>س</Text></View><Text style={[utStyles.cdColon, { color }]}>:</Text></>)}
             <View style={utStyles.cdUnit}><Text style={[utStyles.cdVal, { color }]}>{String(m).padStart(2, '0')}</Text><Text style={utStyles.cdSub}>د</Text></View>
             <Text style={[utStyles.cdColon, { color }]}>:</Text>
@@ -925,11 +892,11 @@ function TodayTimeline({ prediction, anchorStartIso }: { prediction: UserPredict
         const slotKey = `${slot.state}|${Math.round(new Date(slot.startIso).getTime() / 60_000)}`;
         let currentStartF: string;
         if (isActive && isPositiveOffsetPending && anchorStartIso) {
-          currentStartF = fmtTimeAr(anchorStartIso);
-        } else { currentStartF = fmtTimeAr(slot.startIso); }
+          currentStartF = new Date(anchorStartIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
+        } else { currentStartF = slot.shiftedStartFormatted ?? slot.startFormatted; }
         if (!stableStartMapRef.current[slotKey] && currentStartF) stableStartMapRef.current[slotKey] = currentStartF;
         const startF = isActive && isPositiveOffsetPending && anchorStartIso ? currentStartF : (stableStartMapRef.current[slotKey] ?? currentStartF);
-        const currentEndF = slot.endIso ? fmtTimeAr(slot.endIso) : '';
+        const currentEndF = slot.shiftedEndFormatted ?? slot.endFormatted;
         if (!stableEndMapRef.current[slotKey] && currentEndF) stableEndMapRef.current[slotKey] = currentEndF;
         const endF = stableEndMapRef.current[slotKey] ?? currentEndF;
         const isFuture = !isActive && new Date(slot.startIso).getTime() > nowMs;
@@ -1074,7 +1041,7 @@ function ParticipationNudge({ userId }: { userId?: string }) {
     <View style={pnStyles.banner}>
       <View style={{ flex: 1 }}>
         <Text style={pnStyles.title}>🤝 شارك المجتمع!</Text>
-        <Text style={pnStyles.body}>لم تُبلّغ عن أي تغيير منذ فترة. عند تغيّر الكهرباء في حيّك — اضغط{' '}<Text style={{ fontWeight: '800', color: T.accent }}>الإبلاغ عن تغيير</Text>{' '}لتُحسّن دقة توقعاتك وتساعد جيرانك. 🎯</Text>
+        <Text style={pnStyles.body}>لم تُبلّغ عن أي تغيير منذ فترة. عند تغيّر الكهرباء في حيّك — اضغط{' '}<Text style={{ fontWeight: '800', color: T.accent }}>"الإبلاغ عن تغيير"</Text>{' '}لتُحسّن دقة توقعاتك وتساعد جيرانك. 🎯</Text>
       </View>
       <TouchableOpacity onPress={() => setShow(false)} style={pnStyles.dismissBtn}><Text style={pnStyles.dismissText}>✕</Text></TouchableOpacity>
     </View>
@@ -1112,22 +1079,12 @@ const sbStyles = StyleSheet.create({
 function useStableNextTransition(nt: UserPrediction['nextTransition'] | null | undefined) {
   const ref = useRef<{ key: string; rangeStartIso: string; rangeEndIso: string; rangeLabel: string } | null>(null);
   if (!nt) { ref.current = null; return nt ?? null; }
-  // Validate required fields to prevent crashes from malformed prediction data
-  if (
-    !nt.rangeStartIso ||
-    !nt.rangeEndIso ||
-    !nt.rangeLabel ||
-    Number.isNaN(Date.parse(nt.rangeStartIso))
-  ) {
-    ref.current = null;
-    return null;
-  }
-  const roundedStart = Math.round(new Date(nt.rangeStartIso!).getTime() / (5 * 60_000));
+  const roundedStart = Math.round(new Date(nt.rangeStartIso).getTime() / (5 * 60_000));
   const key = `${nt.type}|${roundedStart}`;
   if (!ref.current || ref.current.key !== key) {
-    ref.current = { key, rangeStartIso: nt.rangeStartIso!, rangeEndIso: nt.rangeEndIso!, rangeLabel: nt.rangeLabel! };
+    ref.current = { key, rangeStartIso: nt.rangeStartIso, rangeEndIso: nt.rangeEndIso, rangeLabel: nt.rangeLabel };
   }
-  return { ...nt, rangeStartIso: ref.current!.rangeStartIso, rangeEndIso: ref.current!.rangeEndIso, rangeLabel: ref.current!.rangeLabel };
+  return { ...nt, rangeStartIso: ref.current.rangeStartIso, rangeEndIso: ref.current.rangeEndIso, rangeLabel: ref.current.rangeLabel };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1282,7 +1239,7 @@ export default function Home() {
           </View>
           <View>
             <Text style={styles.greeting}>أهلاً، {displayName} 👋</Text>
-            <Text style={styles.date}>{safeToLocaleString(new Date().toISOString(), { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+            <Text style={styles.date}>{new Date().toLocaleDateString('ar-SA', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
           </View>
         </View>
 

@@ -59,8 +59,6 @@ import {
   type UserPrediction as _EngineUserPrediction,
   type ResyncPoint,
   type TransitionMode,
-  type OffsetState,
-  type OffsetValue,
   type CommunitySyncMeta as _EngineCommunitySyncMeta,
   type ShiftedScheduleSlot as _EngineShiftedScheduleSlot,
   type ScheduleStateMode as _EngineScheduleStateMode,
@@ -68,7 +66,7 @@ import {
 } from '../app/(admin)/tmmsEngine';
 
 // ── Public type re-exports ─────────────────────────────────────────────────
-export type { ResyncPoint, TransitionMode, OffsetState, OffsetValue } from '../app/(admin)/tmmsEngine';
+export type { ResyncPoint, TransitionMode } from '../app/(admin)/tmmsEngine';
 export type ScheduleStateMode = _EngineScheduleStateMode;
 export type CommunitySyncMeta = _EngineCommunitySyncMeta;
 
@@ -77,7 +75,9 @@ export type ShiftedScheduleSlot = _EngineShiftedScheduleSlot & {
   isEstimatedPendingOffset?: boolean;
 };
 
-// ── TMMS V2.1: Offset State types (imported from engine) ──────────────────
+// ── TMMS V2.1: Offset State types ──────────────────────────────────────────
+export type OffsetState = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' | 'PENDING_NEGATIVE';
+export type OffsetValue = number | 'PENDING';
 export type TimelineAlignment = string;
 
 export interface GeneratedOnInfo {
@@ -89,6 +89,8 @@ export interface GeneratedOnInfo {
 }
 
 export type UserPrediction = _EngineUserPrediction & {
+  offsetState?: OffsetState;
+  offsetValue?: OffsetValue;
   timelineAlignment?: TimelineAlignment;
   generatedOnInfo?: GeneratedOnInfo | null;
   pendingNegativeResolutionIso?: string | null;
@@ -183,7 +185,6 @@ const UNCERTAIN_DEDUCTION_CAP_MS = 6 * 3600_000;
 function applyUncertainZoneDeduction(
   pred: UserPrediction,
   entryIso: string,
-  growattOnIso: string | null,
   nowMs: number,
 ): UserPrediction {
   const entryMs = new Date(entryIso).getTime();
@@ -201,20 +202,13 @@ function applyUncertainZoneDeduction(
 
   const oldStartMs = new Date(slot.startIso).getTime();
   const oldEndMs = new Date(slot.endIso).getTime();
-  // Require a Growatt ON timestamp to measure the wait accurately
-  const growattOnMs = growattOnIso ? new Date(growattOnIso).getTime() : NaN;
-  if (!Number.isFinite(growattOnMs)) return pred;
+  if (entryMs >= oldStartMs) return pred;
+  if (oldStartMs - entryMs > UNCERTAIN_DEDUCTION_CAP_MS) return pred;
 
-  // Wait time measured inside UNCERTAIN_ZONE (spec V2.2)
-  const waitMs = Math.max(0, growattOnMs - entryMs);
-  if (waitMs <= 0) return pred;
-  if (waitMs > UNCERTAIN_DEDUCTION_CAP_MS) return pred;
-
-  // Deduct the waiting time from the next ON duration by
-  // keeping the original ON end and starting the ON at Growatt ON.
-  const newStartMs = growattOnMs;
-  const newEndMs = oldEndMs; // unchanged → duration shortens by waitMs
-  const delta = 0; // subsequent slots remain anchored to original end
+  const spanMs = oldEndMs - oldStartMs;
+  const newStartMs = entryMs;
+  const newEndMs = newStartMs + spanMs;
+  const delta = newEndMs - oldEndMs;
 
   const newSlots = slots.map((s, i) => {
     if (i < idx) return s;
@@ -690,37 +684,35 @@ export function useUserPredictions(
         growattOnIso !== null &&
         growattOnMs >= uncertainEntryMs - 60_000; // 1-min tolerance for sub-second ordering
 
-      // inUncertainFamily already guarantees modeV22 is not COMMUNITY_SYNCED
       const shouldImmediateFlip =
         growattOnIsCurrentCycle &&
         inUncertainFamily &&
+        modeV22 !== 'COMMUNITY_SYNCED' &&
         offsetMinutes < 0;
 
       if (shouldImmediateFlip && growattOnIso) {
         const growattOnMs = new Date(growattOnIso).getTime();
-
-        // V2.2 (V3 fix): Use the referenced ON duration from the resync point
-        // instead of a heuristic 2-hour lookback. The wait time (Growatt ON -
-        // UNCERTAIN_ZONE entry) is deducted from the full ON duration.
-        const fullOnDurationMin = resyncPoint?.generatedOnDurationMin
-          ?? v21Meta.generatedOn?.durationMin
-          ?? 120; // fallback 2h only if neither source has it
-        const uncertainEntryMs = uncertainEntryRef.current
-          ? new Date(uncertainEntryRef.current).getTime()
-          : growattOnMs;
-        const waitMin = Math.max(0, Math.round((growattOnMs - uncertainEntryMs) / 60_000));
-        const remainingOnMin = Math.max(1, fullOnDurationMin - waitMin);
-
-        const userOnStartMs = growattOnMs;
+        // User's ON started = Growatt ON time + offset (negative → shifts backward)
+        // Example: G = 18:00, offset = −60 → userOnStart = 17:00
+        // Elapsed when watcher fires: now − 17:00 ≈ 60 min = |offset|
+        const userOnStartMs = growattOnMs + offsetMinutes * 60_000;
         const userOnStartIso = new Date(userOnStartMs).toISOString();
-        const userOnEndMs = userOnStartMs + remainingOnMin * 60_000;
+
+        // Estimate ON duration from the shifted schedule
+        const scheduledOnSlot = (v21Result.daySchedule ?? []).find(
+          (s: ShiftedScheduleSlot) => s.state === 'ON' && new Date(s.startIso).getTime() >= growattOnMs - 2 * 3600_000,
+        );
+        const onDurationMs = scheduledOnSlot?.endIso
+          ? new Date(scheduledOnSlot.endIso).getTime() - new Date(scheduledOnSlot.startIso).getTime()
+          : 120 * 60_000; // 2h default
+        const userOnEndMs = userOnStartMs + onDurationMs;
         const userOnEndIso = new Date(userOnEndMs).toISOString();
 
         const fmtLocal = (iso: string) => new Date(iso).toLocaleString('en-US', {
           timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
         }).replace('AM', ' ص').replace('PM', ' م');
 
-        const durMin = Math.max(0, Math.round((userOnEndMs - userOnStartMs) / 60_000));
+        const durMin = Math.round(onDurationMs / 60_000);
         const durH = Math.floor(durMin / 60); const durM = durMin % 60;
         const durationLabel = durH === 0 ? `${durM}د`
           : durM === 0 ? (durH === 1 ? 'ساعة' : `${durH}س`)
@@ -757,9 +749,13 @@ export function useUserPredictions(
         immediateOnActiveRef.current = true;
         shouldClearGrowattOnRef.current = false; // keep active while holding
 
-        // Keep the original UNCERTAIN_ZONE entry (predicted ON start)
-        // so that standard deduction can apply consistently when
-        // utility_predictions updates.
+        // Save the UNCERTAIN_ZONE entry as userOnStartIso so that when
+        // utility_predictions eventually updates, applyUncertainZoneDeduction
+        // uses the correct backdated start.
+        if (!uncertainEntryRef.current || new Date(uncertainEntryRef.current).getTime() > userOnStartMs) {
+          uncertainEntryRef.current = userOnStartIso;
+          AsyncStorage.setItem(UNCERTAIN_ZONE_ENTRY_KEY, userOnStartIso).catch(() => {});
+        }
 
         finalResult = {
           ...v21Result,
@@ -777,7 +773,8 @@ export function useUserPredictions(
             statusLine: '',
             overrunMinutes: 0,
             communityElevated: false,
-          } as typeof v21Result.atc,
+            isHoldingState: false,
+          },
         };
       } else {
         immediateOnActiveRef.current = false;
@@ -796,8 +793,8 @@ export function useUserPredictions(
 
           if (!isStale && v21Result.currentState === 'ON' && modeV22 !== 'COMMUNITY_SYNCED') {
             // utility_predictions has updated → backdate ON cycle to entry anchor
-            // and shorten ON duration by the measured wait.
-            finalResult = applyUncertainZoneDeduction(v21Result, uncertainEntryRef.current, growattOnIso, nowV22);
+            // so elapsed shows the full wait time and remaining = predicted − wait.
+            finalResult = applyUncertainZoneDeduction(v21Result, uncertainEntryRef.current, nowV22);
           } else if (
             isStale ||
             modeV22 === 'COMMUNITY_SYNCED' ||

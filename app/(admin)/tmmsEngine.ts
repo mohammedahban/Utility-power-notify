@@ -41,9 +41,6 @@
 
 export type TransitionMode = 'AUTO' | 'MANUAL';
 
-export type OffsetState = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' | 'PENDING_NEGATIVE';
-export type OffsetValue = number | 'PENDING';
-
 export type ScheduleStateMode =
   | 'NORMAL'
   | 'PREDICTION_RANGE'
@@ -177,15 +174,13 @@ export interface ResyncPoint {
   appliedAtIso: string;
   reporterName?: string | null;
   reporterReliability?: number | null;
-  offsetState?: OffsetState;
-  offsetValue?: OffsetValue;
+  offsetState?: string;
+  offsetValue?: number | string;
   timelineAlignment?: string;
   generatedOnStartIso?: string;
   generatedOnDurationMin?: number | null;
   generatedOnReferenceIso?: string | null;
   generatedOnReferenceKind?: string | null;
-  /** V2.2: Duration (minutes) of the OFF that follows the replaced Growatt ON */
-  followingOffDurationMin?: number | null;
   confirmationTime?: string;
 }
 
@@ -236,12 +231,9 @@ export interface UserPrediction extends Prediction {
   isHoldingState: boolean;
   crisisMode: boolean | null;
   crisisReason: string | null;
-  // Duration labels computed by engine
-  expectedOnDurationLabel?: string | null;
-  expectedOffDurationLabel?: string | null;
   // V2.1 fields
-  offsetState?: OffsetState;
-  offsetValue?: OffsetValue;
+  offsetState?: string;
+  offsetValue?: number | string;
   timelineAlignment?: string;
   generatedOnInfo?: any;
   isPendingNegative?: boolean;
@@ -253,12 +245,12 @@ export interface UserPrediction extends Prediction {
 
 export function fmtYemenTime(iso: string): string {
   try {
-    return new Date(iso).toLocaleString('ar-SA', {
+    return new Date(iso).toLocaleString('en-US', {
       timeZone: 'Asia/Aden',
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
-    });
+    }).replace('AM', ' ص').replace('PM', ' م');
   } catch {
     return iso;
   }
@@ -393,10 +385,7 @@ function computeATCMode(
   // ── COMMUNITY_SYNCED ─────────────────────────────────────────────────────
   // A community resync overrides everything — the user's timeline is
   // synced to the community report's Generated ON.
-  // V2.2 (O4/V4 fix): NEUTRAL offset (Period 3) bypasses community sync.
-  // Neutral users clone Growatt exactly — no Generated ON override, no
-  // validation window, no special branch. They use the standard engine below.
-  if (resyncPoint && resyncPoint.offsetState !== 'NEUTRAL') {
+  if (resyncPoint) {
     const syncedMs = new Date(resyncPoint.syncedAtIso).getTime();
     // FIX (#3): a missing/zero Generated-ON duration previously matched the
     // `durationMin === 0` branch below and held the synced state FOREVER —
@@ -434,52 +423,30 @@ function computeATCMode(
       };
     }
 
-    // V2.2 (G4): NEXT OFF RULE — when the synced/Generated ON cycle ends, the
-    // OFF state begins AUTOMATICALLY at the cycle end. If followingOffDurationMin
-    // is available (captured at report time), the OFF lasts exactly that duration.
-    // Otherwise, the OFF fills the gap until the next ON in the shifted schedule.
+    // FIX (#3) NEXT OFF RULE: when the synced/Generated ON cycle ends, the
+    // OFF state begins AUTOMATICALLY at the cycle end — no confirmation
+    // needed for the ON→OFF direction. The OFF lasts until the next ON slot
+    // of the shifted schedule; that OFF→ON boundary then follows the normal
+    // rule-driven machine below (verification window / UNCERTAIN_ZONE /
+    // Growatt or community confirmation).
     if (resyncPoint.syncedState === 'ON') {
       const cycleEndIso = new Date(cycleEndMs).toISOString();
-      // V2.2 (G4): Use the explicitly captured following-OFF duration if available
-      const followingOffDur = resyncPoint.followingOffDurationMin ?? null;
-      if (followingOffDur !== null && followingOffDur > 0) {
-        const offEndMs = cycleEndMs + followingOffDur * 60_000;
-        const offEndIso = new Date(offEndMs).toISOString();
-        if (nowMs < offEndMs) {
-          return {
-            mode: 'NORMAL',
-            currentState: 'OFF',
-            currentStateStartIso: cycleEndIso,
-            isHoldingState: false,
-            overrunMinutes: 0,
-            communityElevated: false,
-            inValidationWindow: false,
-            validationWindowRemainingMin: 0,
-            scheduledAutoTransitionIso: offEndIso,
-            statusLine: '',
-          };
-        }
-        // Past the explicit OFF end — fall through to the standard machine
-        // with the next ON now active.
-      } else {
-        // Legacy: no explicit following-OFF duration — fill gap until next ON
-        const nextOn = shiftedSlots
-          .filter(s => s.state === 'ON' && new Date(s.startIso).getTime() > cycleEndMs)
-          .sort((a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime())[0] ?? null;
-        if (!nextOn || nowMs < new Date(nextOn.startIso).getTime()) {
-          return {
-            mode: 'NORMAL',
-            currentState: 'OFF',
-            currentStateStartIso: cycleEndIso,
-            isHoldingState: false,
-            overrunMinutes: 0,
-            communityElevated: false,
-            inValidationWindow: false,
-            validationWindowRemainingMin: 0,
-            scheduledAutoTransitionIso: null,
-            statusLine: '',
-          };
-        }
+      const nextOn = shiftedSlots
+        .filter(s => s.state === 'ON' && new Date(s.startIso).getTime() > cycleEndMs)
+        .sort((a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime())[0] ?? null;
+      if (!nextOn || nowMs < new Date(nextOn.startIso).getTime()) {
+        return {
+          mode: 'NORMAL',
+          currentState: 'OFF',
+          currentStateStartIso: cycleEndIso,
+          isHoldingState: false,
+          overrunMinutes: 0,
+          communityElevated: false,
+          inValidationWindow: false,
+          validationWindowRemainingMin: 0,
+          scheduledAutoTransitionIso: null,
+          statusLine: '',
+        };
       }
       // Past the next ON start — fall through to the standard machine.
     }
@@ -892,7 +859,7 @@ export function applyOffsetToPrediction(
     const alreadyFirst = finalSlots.length > 0 &&
       Math.abs(new Date(finalSlots[0].startIso).getTime() - syncedMs) < 60_000;
     if (!alreadyFirst) {
-      const genOnSlot: ShiftedScheduleSlot = {
+      finalSlots = [{
         state: resyncPoint.syncedState,
         startIso: resyncPoint.syncedAtIso,
         endIso: cycleEndIso,
@@ -904,49 +871,12 @@ export function applyOffsetToPrediction(
         shiftedStartFormatted: fmtYemenTime(resyncPoint.syncedAtIso),
         shiftedEndFormatted: fmtYemenTime(cycleEndIso),
         isResynced: true,
-      };
-
-      // V2.2 (G4/T1): Inject the following OFF slot when available.
-      // This creates the complete ON→OFF replacement pair as specified.
-      const followingOffDur = resyncPoint.followingOffDurationMin;
-      if (followingOffDur !== null && followingOffDur !== undefined && followingOffDur > 0 &&
-          resyncPoint.syncedState === 'ON') {
-        const offStartMs = syncedMs + durationMin * 60_000;
-        const offEndMs = offStartMs + followingOffDur * 60_000;
-        const offStartIso = new Date(offStartMs).toISOString();
-        const offEndIso = new Date(offEndMs).toISOString();
-        const followingOffSlot: ShiftedScheduleSlot = {
-          state: 'OFF',
-          startIso: offStartIso,
-          endIso: offEndIso,
-          startFormatted: fmtYemenTime(offStartIso),
-          endFormatted: fmtYemenTime(offEndIso),
-          durationLabel: durationLabelFromMin(followingOffDur),
-          zone: getZoneFromIso(offStartIso),
-          isEstimated: false,
-          shiftedStartFormatted: fmtYemenTime(offStartIso),
-          shiftedEndFormatted: fmtYemenTime(offEndIso),
-          isResynced: true,
-        };
-        finalSlots = [genOnSlot, followingOffSlot, ...shiftedSlots];
-      } else {
-        finalSlots = [genOnSlot, ...shiftedSlots];
-      }
+      }, ...shiftedSlots];
     }
   }
 
   // ── 5. Compute community offset (Rule Q2-A) ───────────────────────────────
-  // V2.2 (C1 fix): Only compute community offset when the resync point does NOT
-  // already carry the reporter's authoritative offset values. If offsetState,
-  // offsetValue, and timelineAlignment are all present, use them directly.
-  // The recomputation here is a legacy migration fallback for older resync points.
-  if (
-    resyncPoint &&
-    frozenCommunityOffset === null &&
-    onOffsetCalculated &&
-    // V2.2 (C1): Skip if reporter's authoritative values are already present
-    !(resyncPoint.offsetState && resyncPoint.offsetValue !== undefined && resyncPoint.timelineAlignment)
-  ) {
+  if (resyncPoint && frozenCommunityOffset === null && onOffsetCalculated) {
     const syncMs = new Date(resyncPoint.syncedAtIso).getTime();
     const referenceSlot = rawSlots.find(s => {
       const startMs = new Date(s.startIso).getTime();
