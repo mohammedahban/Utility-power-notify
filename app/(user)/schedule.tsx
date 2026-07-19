@@ -320,7 +320,7 @@ export default function ScheduleScreen() {
   // For POSITIVE_OFFSET_PENDING: use currentStateStartIso as the actual start
   // For reconciledCycleStartIso (immediate ON flip): use the backdated start
   // For others: use anchor + offset or resync
-  const mathematicalActiveStartIso = (() => {
+  const computedActiveStartIso = (() => {
     if (isReconciledFlip) return reconciledStartIso;
     if (userPrediction?.isResynced && userPrediction.resyncedAtIso) {
       return userPrediction.resyncedAtIso;
@@ -333,6 +333,24 @@ export default function ScheduleScreen() {
     }
     return userPrediction?.currentStateStartIso ?? null;
   })();
+
+  // Stabilize the displayed active-start ISO so the schedule doesn't
+  // show a constantly shifting start time every ~30s when the engine
+  // recomputes the prediction (which can shift the ISO by a few
+  // milliseconds). We only accept the new value if it differs from the
+  // currently-displayed one by more than ±2 seconds — small jitter is
+  // treated as noise and ignored.
+  const stableActiveStartRef = useRef<string | null>(null);
+  if (computedActiveStartIso) {
+    const newMs = new Date(computedActiveStartIso).getTime();
+    const oldMs = stableActiveStartRef.current ? new Date(stableActiveStartRef.current).getTime() : null;
+    if (oldMs === null || Math.abs(newMs - oldMs) > 2_000) {
+      stableActiveStartRef.current = computedActiveStartIso;
+    }
+  } else {
+    stableActiveStartRef.current = null;
+  }
+  const mathematicalActiveStartIso = stableActiveStartRef.current;
 
   const currentResyncIso = resyncPoint?.syncedAtIso ?? null;
 
@@ -351,6 +369,14 @@ export default function ScheduleScreen() {
 
   const allSlots = userPrediction?.daySchedule ?? [];
   const nowMs = Date.now();
+
+  const isHolding = userPrediction?.atc?.isHoldingState === true;
+  const scheduleAtcMode = userPrediction?.atc?.mode;
+  const isUncertainFamily =
+    isHolding &&
+    (scheduleAtcMode === 'UNCERTAIN_ZONE' ||
+      scheduleAtcMode === 'WAITING_FOR_GROWATT' ||
+      scheduleAtcMode === 'GRACE_MODE');
 
   // For POSITIVE_OFFSET_PENDING: the synthetic slot (at index 0) is the active slot.
   // For isReconciledFlip: the first ON slot in the schedule whose startIso is
@@ -375,15 +401,29 @@ export default function ScheduleScreen() {
         return nowMs >= start && nowMs < end;
       });
     }
-    return allSlots.findIndex(s => {
+    const live = allSlots.findIndex(s => {
       const start = new Date(s.startIso).getTime();
       const end = s.endIso ? new Date(s.endIso).getTime() : Infinity;
       return nowMs >= start && nowMs < end;
     });
+    if (live >= 0) return live;
+    if (isUncertainFamily) {
+      // Hold at the last ended OFF slot during UNCERTAIN_ZONE — don't
+      // auto-jump to the next future ON slot.
+      for (let i = allSlots.length - 1; i >= 0; i--) {
+        const s = allSlots[i];
+        if (s.state !== 'OFF' || !s.endIso) continue;
+        if (new Date(s.endIso).getTime() <= nowMs) return i;
+      }
+    }
+    return -1;
   })();
 
-  const startIdx = activeIdx >= 0 ? activeIdx
-    : allSlots.findIndex(s => new Date(s.startIso).getTime() > nowMs);
+  const startIdx = activeIdx >= 0
+    ? activeIdx
+    : (isUncertainFamily
+        ? 0  // Hold at the beginning (which will be the ended OFF slot)
+        : allSlots.findIndex(s => new Date(s.startIso).getTime() > nowMs));
   const slots = startIdx > 0 ? allSlots.slice(startIdx) : allSlots;
 
   if (loading) {
@@ -486,7 +526,16 @@ export default function ScheduleScreen() {
             const slotEndMs = slot.endIso ? new Date(slot.endIso).getTime() : Infinity;
             // For POSITIVE_OFFSET_PENDING: first slot is always active
             const isActive = isPositiveOffsetPending ? i === 0 : (nowMs >= slotStartMs && nowMs < slotEndMs);
-            const slotKey = `${slot.state}|${Math.round(slotStartMs / 60_000)}`;
+            // Stable key: by state + slot index + duration bucket.
+            // Previously this used `Math.round(slotStartMs / 60_000)`,
+            // which broke when the engine re-computed the schedule and the
+            // slot's startIso shifted by >30s — the stable map missed its
+            // hit and the displayed start time jumped every ~30s as the
+            // tick re-rendered the schedule. Index-within-slots is stable
+            // across engine recomputes (the engine doesn't reorder slots
+            // unless offset/resync changes, and we clear the maps on
+            // those events above).
+            const slotKey = `${slot.state}|${i}|${slot.durationLabel ?? 'x'}`;
 
             // Active start: use mathematicalActiveStartIso for the active slot.
             // For isReconciledFlip, this is reconciledCycleStartIso (the backdated start).

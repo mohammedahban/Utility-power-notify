@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { ResyncProvider } from '../contexts/ResyncContext';
@@ -14,11 +15,28 @@ import {
 import { useActivityLog } from '../hooks/useActivityLog';
 import { ONBOARDING_KEY } from './onboarding';
 
+// Prevent the native splash screen from auto-hiding on cold start.
+// AuthGate will call SplashScreen.hideAsync() once the auth state is
+// definitively known (loading=false + onboardingChecked=true). Without
+// this, the native splash hides as soon as the JS bundle is ready, which
+// can briefly expose the Expo Router's default initial route (e.g.
+// (admin)) before AuthGate has had a chance to redirect to the correct
+// role-based route.
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // preventAutoHideAsync throws if called more than once — safe to ignore.
+});
+
 function AuthGate() {
   const { session, profile, loading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
   const [onboardingChecked, setOnboardingChecked] = useState(false);
+  // Tracks whether the native splash has been explicitly hidden. We hide it
+  // once auth is definitively known — never before. This prevents the brief
+  // flash of the wrong route (e.g. (admin)) during cold-start session
+  // recovery. useRef avoids calling hideAsync() more than once across
+  // renders triggered by state updates.
+  const splashHiddenRef = useRef(false);
 
   // Check onboarding status once on mount.
   useEffect(() => {
@@ -63,6 +81,17 @@ function AuthGate() {
   // ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!onboardingChecked || loading) return;
+
+    // Auth state is now definitively known. Hide the native splash screen
+    // so the user sees the correct role-based route. Without this guard,
+    // the splash auto-hides when the JS bundle loads (which can be BEFORE
+    // AuthGate has determined the auth state), briefly exposing whichever
+    // route Expo Router defaulted to — including the admin dashboard for
+    // non-admin users.
+    if (!splashHiddenRef.current) {
+      splashHiddenRef.current = true;
+      SplashScreen.hideAsync().catch(() => {});
+    }
 
     const inAuth = segments[0] === 'login' || segments[0] === 'register';
     const inOnboarding = segments[0] === 'onboarding';
@@ -129,11 +158,16 @@ function RootNavigator() {
   return (
     <>
       <AuthGate />
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack screenOptions={{ headerShown: false }} initialRouteName="login">
         <Stack.Screen name="login" />
         <Stack.Screen name="register" />
-        <Stack.Screen name="(admin)" />
+        {/* (user) listed before (admin) so that if Expo Router ever falls back
+            to the first matching group during cold start (e.g. before
+            AuthGate runs), non-admin users see the user app — not the admin
+            dashboard. AuthGate's useEffect explicitly redirects to the
+            correct role-based route once auth state is known. */}
         <Stack.Screen name="(user)" />
+        <Stack.Screen name="(admin)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
       </Stack>

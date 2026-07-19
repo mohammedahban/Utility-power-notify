@@ -83,24 +83,53 @@ export function useStateAnchor(): { anchor: StateAnchor | null } {
       if (inv && inv.utility_on !== null && inv.last_polled) {
         const currentUtilityOn = inv.utility_on as boolean;
 
-        // Only look up power_events if the state differs from cached, or no cache
-        if (!cached || (cached.state === 'ON') !== currentUtilityOn) {
-          // 3. Find the most recent power_event that matches the current state
-          const eventType = currentUtilityOn ? 'UTILITY_ON' : 'UTILITY_OFF';
-          const { data: events } = await supabase
-            .from('power_events')
-            .select('occurred_at, event_type')
-            .eq('event_type', eventType)
-            .order('occurred_at', { ascending: false })
-            .limit(1);
+        // Always look up the latest power_event matching the current state.
+        // Previously, when the cached state matched the live state we'd trust
+        // the cached startIso blindly — but if the app was closed for hours
+        // while power cycled X→Y→X (back to the original state), the cached
+        // startIso would be from the OLD cycle, making the home-screen
+        // "elapsed" timer read many times the predicted duration.
+        const eventType = currentUtilityOn ? 'UTILITY_ON' : 'UTILITY_OFF';
+        const { data: events } = await supabase
+          .from('power_events')
+          .select('occurred_at, event_type')
+          .eq('event_type', eventType)
+          .order('occurred_at', { ascending: false })
+          .limit(1);
 
-          if (!cancelled) {
-            const startIso = events?.[0]?.occurred_at ?? inv.last_polled;
-            applyUtilityOn(currentUtilityOn, startIso);
+        if (!cancelled) {
+          const latestEventIso = events?.[0]?.occurred_at;
+          // Use the event time only if it's newer than the cached anchor's
+          // start — otherwise the cache is still the most accurate source
+          // (e.g. we're in the same cycle as when we cached it).
+          if (latestEventIso) {
+            const eventMs = new Date(latestEventIso).getTime();
+            const cachedMs = cached ? new Date(cached.startIso).getTime() : 0;
+            if (!cached || eventMs > cachedMs) {
+              applyUtilityOn(currentUtilityOn, latestEventIso);
+            } else if (cached) {
+              // Cache is at least as recent as the latest event for this
+              // state — keep the cached startIso (more accurate).
+              lastUtilityOnRef.current = currentUtilityOn;
+              // Persist any state vs cache mismatch (e.g. cached was OFF,
+              // live is ON, but no newer ON event found — edge case where
+              // the live transition hasn't been written yet).
+              if (cached.state !== (currentUtilityOn ? 'ON' : 'OFF')) {
+                applyUtilityOn(currentUtilityOn, cached.startIso);
+              }
+            }
+          } else if (!cached) {
+            // No event and no cache — fall back to last_polled.
+            applyUtilityOn(currentUtilityOn, inv.last_polled);
+          } else {
+            // No event found — trust the cached startIso if state matches,
+            // otherwise fall back to inv.last_polled.
+            if (cached.state === (currentUtilityOn ? 'ON' : 'OFF')) {
+              lastUtilityOnRef.current = currentUtilityOn;
+            } else {
+              applyUtilityOn(currentUtilityOn, inv.last_polled);
+            }
           }
-        } else if (cached) {
-          // State matches cache — trust the cached startIso (more accurate)
-          lastUtilityOnRef.current = currentUtilityOn;
         }
       }
     };

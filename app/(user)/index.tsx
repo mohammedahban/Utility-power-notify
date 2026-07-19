@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUserOffset } from '../../contexts/UserOffsetContext';
+import { useUserOffset } from '../../hooks/useUserOffset';
 import { useTransitionMode } from '../../hooks/useTransitionMode';
 import { useUserPredictions, UserPrediction, ScheduleStateMode } from '../../hooks/useUserPredictions';
 import { useResyncNotifications } from '../../hooks/useResyncNotifications';
@@ -36,23 +36,6 @@ function translateCrisisReason(reason: string): string {
   r = r.replace(/ON durations decreased by (\d+)% vs baseline/, 'مدد التشغيل انخفضت بنسبة $1% مقارنةً بالأساس');
   r = r.replace(/possible generator capacity issue/, 'ربما بسبب مشكلة في سعة المولد');
   return r;
-}
-
-// Safe locale string helper for JSC compatibility
-function safeToLocaleString(iso: string | null | undefined, options: Intl.DateTimeFormatOptions): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  try {
-    return d.toLocaleString('ar-SA', options);
-  } catch {
-    // Fallback for JSC builds with incomplete Intl support
-    const hours = d.getHours();
-    const minutes = d.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'م' : 'ص';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${minutes} ${ampm}`;
-  }
 }
 
 function fmtOverrunAr(min: number): string {
@@ -211,22 +194,8 @@ function fmtTimeAr(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  // Use Arabic locale with only time, no date - wrapped in try/catch for JSC compatibility
-  try {
-    return d.toLocaleString('ar-SA', {
-      timeZone: 'Asia/Aden',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    // Fallback for JSC builds with incomplete Intl support
-    const hours = d.getHours();
-    const minutes = d.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'م' : 'ص';
-    const displayHours = hours % 12 || 12;
-    return `${displayHours}:${minutes} ${ampm}`;
-  }
+  const raw = d.toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  return raw.replace('AM', 'ص').replace('PM', 'م');
 }
 
 const HOUR_WORDS_AR = ['', 'ساعة', 'ساعتان', 'ثلاث ساعات', 'أربع ساعات', 'خمس ساعات', 'ست ساعات', 'سبع ساعات', 'ثماني ساعات', 'تسع ساعات', 'عشر ساعات'];
@@ -261,9 +230,9 @@ function GeneratedOnBanner({ prediction }: { prediction: UserPrediction | null }
   const genOn = prediction?.generatedOnInfo;
   if (!genOn || !prediction?.isGeneratedOnCurrent) return null;
   const color = T.success;
-  const startTime = safeToLocaleString(genOn.startIso, { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  const startTime = new Date(genOn.startIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
   const durationLabel = genOn.durationMin >= 60 ? `${Math.floor(genOn.durationMin / 60)}س ${genOn.durationMin % 60}د` : `${genOn.durationMin}د`;
-  const refTime = safeToLocaleString(genOn.referenceIso, { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  const refTime = new Date(genOn.referenceIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
   return (
     <View style={goStyles.banner}>
       <View style={goStyles.iconWrap}><Text style={{ fontSize: 22 }}>⚡</Text></View>
@@ -290,32 +259,14 @@ const goStyles = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 function PendingNegativeBanner({ prediction }: { prediction: UserPrediction | null }) {
   const isPending = prediction?.isPendingNegative ?? false;
-  const resolutionIso = prediction?.pendingNegativeResolutionIso ?? null;
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
   if (!isPending) return null;
-  let countdownLabel = 'بانتظار تحوّل Growatt القادم';
-  if (resolutionIso) {
-    const ms = new Date(resolutionIso).getTime() - Date.now();
-    if (ms > 0) {
-      const h = Math.floor(ms / 3600000); const m = Math.floor((ms % 3600000) / 60000); const s = Math.floor((ms % 60000) / 1000);
-      countdownLabel = `≈ ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    } else { countdownLabel = 'الآن — بانتظار Growatt'; }
-  }
   return (
     <View style={pn2Styles.banner}>
       <View style={pn2Styles.iconWrap}><Text style={{ fontSize: 22 }}>⏳</Text></View>
       <View style={{ flex: 1 }}>
         <Text style={pn2Styles.title}>فارق معلَّق (Pending Negative)</Text>
         <Text style={pn2Styles.body}>بلاغك أو بلاغ المُبلِّغ وصل في النصف الثاني من فترة الانطفاء المتوقّعة. الفارق الزمني سيُحسب تلقائياً بمجرد أن يتحوّل Growatt إلى تشغيل.</Text>
-        <View style={pn2Styles.countdownRow}>
-          <Text style={pn2Styles.countdownLabel}>توقّع الحل:</Text>
-          <Text style={pn2Styles.countdownValue}>{countdownLabel}</Text>
-        </View>
-        <Text style={pn2Styles.note}>⚠ تنبؤات التشغيل القادمة تُعرض كـ تقديري (فارق معلّق) حتى يُحلّ الفارق.</Text>
+        <Text style={pn2Styles.note}>⚠ تنبؤات التشغيل القادمة تُعرض كـ "تقديري (فارق معلّق)" حتى يُحلّ الفارق.</Text>
       </View>
     </View>
   );
@@ -325,9 +276,6 @@ const pn2Styles = StyleSheet.create({
   iconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: T.elevated, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   title: { color: T.warning, fontSize: 12, fontWeight: '800', letterSpacing: 0.5, textAlign: 'right', marginBottom: 5 },
   body: { color: T.textSecondary, fontSize: 12, lineHeight: 18, textAlign: 'right', marginBottom: 8 },
-  countdownRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, marginBottom: 6 },
-  countdownLabel: { color: T.textMuted, fontSize: 10, fontWeight: '600' },
-  countdownValue: { color: T.warning, fontSize: 16, fontWeight: '900', letterSpacing: 1, fontVariant: ['tabular-nums'] },
   note: { color: T.warning + 'aa', fontSize: 10, fontStyle: 'italic', textAlign: 'right' },
 });
 
@@ -377,7 +325,7 @@ function PositiveOffsetPendingBanner({ prediction }: { prediction: UserPredictio
   const progressPct = totalDurationMs > 0 ? Math.min(1, elapsedMs / totalDurationMs) : 0;
   const isOn = prediction?.currentState === 'ON';
   const nextStateLabel = isOn ? 'طافية' : 'شغالة'; const nextStateEmoji = isOn ? '🔴' : '⚡';
-  const scheduledTimeLabel = safeToLocaleString(scheduledIso, { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true });
+  const scheduledTimeLabel = new Date(scheduledIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', 'ص').replace('PM', 'م');
   return (
     <View style={popStyles.banner}>
       <View style={popStyles.iconWrap}><Text style={{ fontSize: 22 }}>⏰</Text></View>
@@ -549,25 +497,25 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
     </View>
   ) : null;
 
-  const ReasoningBlock = reasoningLine ? (
-    <View style={psStyles.reasoningBox}><Text style={psStyles.reasoningText}>💡 {reasoningLine}</Text></View>
-  ) : null;
-
   const DurationsBlock = (prediction?.expectedOnDurationLabel || prediction?.expectedOffDurationLabel) ? (
     <View style={psStyles.durRow}>
       {prediction?.expectedOnDurationLabel ? (
         <View style={[psStyles.durChip, { borderColor: T.success + '44' }]}>
-          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً تستمر الكهرباء:</Text><Text style={[psStyles.durChipValue, { color: T.success }]}>{prediction.expectedOnDurationLabel}</Text></View>
+          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً تستمر الكهرباء:</Text><Text style={[psStyles.durChipValue, { color: T.success }]}>{durationWordsAr(prediction.expectedOnDurationLabel)}</Text></View>
           <Text style={psStyles.durChipIcon}>🟢</Text>
         </View>
       ) : null}
       {prediction?.expectedOffDurationLabel ? (
         <View style={[psStyles.durChip, { borderColor: T.danger + '44' }]}>
-          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً يستمر الانقطاع:</Text><Text style={[psStyles.durChipValue, { color: T.danger }]}>{prediction.expectedOffDurationLabel}</Text></View>
+          <View style={{ flex: 1 }}><Text style={psStyles.durChipLabel}>عادةً يستمر الانقطاع:</Text><Text style={[psStyles.durChipValue, { color: T.danger }]}>{durationWordsAr(prediction.expectedOffDurationLabel)}</Text></View>
           <Text style={psStyles.durChipIcon}>🔴</Text>
         </View>
       ) : null}
     </View>
+  ) : null;
+
+  const ReasoningBlock = reasoningLine ? (
+    <View style={psStyles.reasoningBox}><Text style={psStyles.reasoningText}>💡 {reasoningLine}</Text></View>
   ) : null;
 
   if (atcMode === 'COMMUNITY_SYNCED') {
@@ -602,8 +550,7 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
           {elapsed ? (<View style={psStyles.timeBlock}><Text style={psStyles.timeLabel}>منذ:</Text><Text style={[psStyles.timeValue, { color: color + 'cc' }]}>{elapsed}</Text></View>) : null}
           {remainLabel ? (<View style={[psStyles.timeBlock, { borderColor: color + '30', borderWidth: 1 }]}><Text style={psStyles.timeLabel}>الوقت المتوقع المتبقي:</Text><Text style={[psStyles.timeValue, { color }]}>{remainLabel}</Text></View>) : null}
         </View>
-        {ReasoningBlock}
-        {DurationsBlock}
+        {DurationsBlock}{ReasoningBlock}
       </View>
     );
   }
@@ -658,6 +605,7 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
                   <Text style={psStyles.liveClockValue}>{overrunLiveClock}</Text>
                 </View>
                 <Text style={psStyles.deductionNote}>سيُخصم من مدة التشغيل القادمة</Text>
+                <Text style={psStyles.uncertainHintLine}>💡 قد تشتعل الكهرباء في أي لحظة — أرسل بلاغاً عند عودتها</Text>
               </View>
             )}
             {isUncertain && tMode === 'MANUAL' && (
@@ -667,8 +615,7 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
           </View>
         );
       })()}
-      {ReasoningBlock}
-      {DurationsBlock}
+      {DurationsBlock}{ReasoningBlock}
     </View>
   );
 }
@@ -719,6 +666,7 @@ const psStyles = StyleSheet.create({
   liveClockRow: { flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1a0a00', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8 },
   liveClockLabel: { color: T.warning + '99', fontSize: 10, fontWeight: '600' },
   liveClockValue: { color: T.warning, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'], letterSpacing: 2 },
+  uncertainHintLine: { color: T.warning + 'cc', fontSize: 11, fontWeight: '600', textAlign: 'right', marginTop: 6, lineHeight: 16 },
   deductionNote: { color: T.warning + 'cc', fontSize: 11, fontWeight: '600', textAlign: 'right', fontStyle: 'italic' },
   reasoningBox: { backgroundColor: T.elevated, borderRadius: 10, padding: 10, marginTop: 8, borderWidth: 1, borderColor: T.border },
   reasoningText: { color: T.textMuted, fontSize: 11, lineHeight: 17, textAlign: 'right' },
@@ -778,9 +726,9 @@ function UpcomingTransitionCard({ prediction }: { prediction: UserPrediction | n
         {effectiveNt && (
           <View style={utStyles.rangeBox}>
             <Text style={[utStyles.rangeBoxLabel, { color: isCurrentOn ? T.danger : T.success }]}>{effectiveNt.type === 'UTILITY_ON' ? 'من المتوقع أن تشتغل الكهرباء بين:' : 'من المتوقع أن تنطفئ الكهرباء بين:'}</Text>
-            <View style={utStyles.rangeTimeStack}>
+            <View style={utStyles.rangeTimeStack} dir="ltr">
               <Text style={[utStyles.rangeTime, { color: isCurrentOn ? T.danger : T.success }]}>{fmtTimeAr(effectiveNt.rangeStartIso) || (effectiveNt as any).earliestFormatted || '—'}</Text>
-              {effectiveNt.rangeStartIso !== effectiveNt.rangeEndIso && (<><Text style={utStyles.rangeSep}>&#x644;</Text><Text style={[utStyles.rangeTime, { color: isCurrentOn ? T.danger : T.success }]}>{fmtTimeAr(effectiveNt.rangeEndIso) || (effectiveNt as any).latestFormatted || '&mdash;'}</Text></>)}
+              {effectiveNt.rangeStartIso !== effectiveNt.rangeEndIso && (<><Text style={utStyles.rangeSep}>و</Text><Text style={[utStyles.rangeTime, { color: isCurrentOn ? T.danger : T.success }]}>{fmtTimeAr(effectiveNt.rangeEndIso) || (effectiveNt as any).latestFormatted || '—'}</Text></>)}
             </View>
           </View>
         )}
@@ -823,18 +771,18 @@ function UpcomingTransitionCard({ prediction }: { prediction: UserPrediction | n
           <Text style={[utStyles.rangeWindowSub, { color: color + 'aa' }]}>قد يحدث التغيير في أي لحظة</Text>
         </View>
       )}
-      <View style={utStyles.rangeBox}>
+      <View style={[utStyles.rangeBox, { borderColor: color + '25' }]}>
         <Text style={[utStyles.rangeBoxLabel, { color }]}>{isNextOn ? 'من المتوقع أن تشتغل الكهرباء بين:' : 'من المتوقع أن تنطفئ الكهرباء بين:'}</Text>
-        <View style={utStyles.rangeTimeStack}>
+        <View style={utStyles.rangeTimeStack} dir="ltr">
           <Text style={[utStyles.rangeTime, { color }]}>{fmtTimeAr(nt.rangeStartIso) || (nt as any).earliestFormatted || '—'}</Text>
           <Text style={[utStyles.rangeSep, { color: color + '88' }]}>و</Text>
           <Text style={[utStyles.rangeTime, { color }]}>{fmtTimeAr(nt.rangeEndIso) || (nt as any).latestFormatted || '—'}</Text>
         </View>
       </View>
       {!nt.inRangeWindow && (
-              <View style={utStyles.countdownSection}>
-                <Text style={utStyles.countdownLabel}>⏳ يبدأ نطاق التوقع بعد</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 10 }}>
+        <View style={utStyles.countdownSection}>
+          <Text style={utStyles.countdownLabel}>⏳ يبدأ نطاق التوقع بعد</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginBottom: 10 }}>
             {h > 0 && (<><View style={utStyles.cdUnit}><Text style={[utStyles.cdVal, { color }]}>{String(h).padStart(2, '0')}</Text><Text style={utStyles.cdSub}>س</Text></View><Text style={[utStyles.cdColon, { color }]}>:</Text></>)}
             <View style={utStyles.cdUnit}><Text style={[utStyles.cdVal, { color }]}>{String(m).padStart(2, '0')}</Text><Text style={utStyles.cdSub}>د</Text></View>
             <Text style={[utStyles.cdColon, { color }]}>:</Text>
@@ -906,13 +854,45 @@ function TodayTimeline({ prediction, anchorStartIso }: { prediction: UserPredict
   const slots = prediction?.daySchedule ?? [];
   const nowMs = Date.now();
   const atcMode = prediction?.atc?.mode;
+  const isHolding = prediction?.atc?.isHoldingState === true;
   const isPositiveOffsetPending = atcMode === 'POSITIVE_OFFSET_PENDING';
+  const isUncertainFamily =
+    isHolding &&
+    (atcMode === 'UNCERTAIN_ZONE' ||
+      atcMode === 'WAITING_FOR_GROWATT' ||
+      atcMode === 'GRACE_MODE');
+
+  // During UNCERTAIN_ZONE the OFF slot has ended but we must NOT auto-jump
+  // to the next future ON slot. Anchor to the most-recently-ended OFF slot so
+  // the timeline stays visibly OFF until Growatt actually turns ON.
   const activeIdx = (() => {
     if (isPositiveOffsetPending && slots.length > 0) return 0;
-    return slots.findIndex(s => { const start = new Date(s.startIso).getTime(); const end = s.endIso ? new Date(s.endIso).getTime() : Infinity; return nowMs >= start && nowMs < end; });
+    const live = slots.findIndex(s => {
+      const start = new Date(s.startIso).getTime();
+      const end = s.endIso ? new Date(s.endIso).getTime() : Infinity;
+      return nowMs >= start && nowMs < end;
+    });
+    if (live >= 0) return live;
+    if (isUncertainFamily) {
+      // Hold at the last ended OFF slot during UNCERTAIN_ZONE
+      const lastEndedOff = (() => {
+        for (let i = slots.length - 1; i >= 0; i--) {
+          const s = slots[i];
+          if (s.state !== 'OFF' || !s.endIso) continue;
+          if (new Date(s.endIso).getTime() <= nowMs) return i;
+        }
+        return -1;
+      })();
+      if (lastEndedOff >= 0) return lastEndedOff;
+    }
+    return -1;
   })();
 
-  const startIdx = activeIdx >= 0 ? activeIdx : slots.findIndex(s => new Date(s.startIso).getTime() > nowMs);
+  const startIdx = activeIdx >= 0
+    ? activeIdx
+    : (isUncertainFamily
+        ? -1  // Don't fall forward to future ON during UNCERTAIN_ZONE
+        : slots.findIndex(s => new Date(s.startIso).getTime() > nowMs));
   const displaySlots = startIdx >= 0 ? slots.slice(startIdx, startIdx + 4) : slots.slice(0, 4);
   if (displaySlots.length === 0) return null;
 
@@ -922,14 +902,24 @@ function TodayTimeline({ prediction, anchorStartIso }: { prediction: UserPredict
       {displaySlots.map((slot, i) => {
         const isActive = i === 0 && activeIdx >= 0;
         const isOn = slot.state === 'ON'; const color = isOn ? T.success : T.danger;
-        const slotKey = `${slot.state}|${Math.round(new Date(slot.startIso).getTime() / 60_000)}`;
+        // Stable key: by state + index-in-displaySlots + duration bucket.
+        // Previously the key used `Math.round(startMs / 60_000)`, which
+        // broke whenever the engine re-computed the schedule and the
+        // slot's startIso shifted by >30s (e.g. 10:00:31 → 10:01). That
+        // caused the "stable" start map to miss → displayed start time
+        // would jump every ~30s when the tick re-rendered the schedule.
+        // Index-within-state is stable across engine re-computes as long
+        // as the slots' positions relative to each other don't reorder —
+        // which they don't unless offset/resync changes (and we clear
+        // the maps on those events above).
+        const slotKey = `${slot.state}|${i}|${slot.durationLabel ?? 'x'}`;
         let currentStartF: string;
         if (isActive && isPositiveOffsetPending && anchorStartIso) {
-          currentStartF = fmtTimeAr(anchorStartIso);
-        } else { currentStartF = fmtTimeAr(slot.startIso); }
+          currentStartF = new Date(anchorStartIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
+        } else { currentStartF = slot.shiftedStartFormatted ?? slot.startFormatted; }
         if (!stableStartMapRef.current[slotKey] && currentStartF) stableStartMapRef.current[slotKey] = currentStartF;
         const startF = isActive && isPositiveOffsetPending && anchorStartIso ? currentStartF : (stableStartMapRef.current[slotKey] ?? currentStartF);
-        const currentEndF = slot.endIso ? fmtTimeAr(slot.endIso) : '';
+        const currentEndF = slot.shiftedEndFormatted ?? slot.endFormatted;
         if (!stableEndMapRef.current[slotKey] && currentEndF) stableEndMapRef.current[slotKey] = currentEndF;
         const endF = stableEndMapRef.current[slotKey] ?? currentEndF;
         const isFuture = !isActive && new Date(slot.startIso).getTime() > nowMs;
@@ -1074,7 +1064,7 @@ function ParticipationNudge({ userId }: { userId?: string }) {
     <View style={pnStyles.banner}>
       <View style={{ flex: 1 }}>
         <Text style={pnStyles.title}>🤝 شارك المجتمع!</Text>
-        <Text style={pnStyles.body}>لم تُبلّغ عن أي تغيير منذ فترة. عند تغيّر الكهرباء في حيّك — اضغط{' '}<Text style={{ fontWeight: '800', color: T.accent }}>الإبلاغ عن تغيير</Text>{' '}لتُحسّن دقة توقعاتك وتساعد جيرانك. 🎯</Text>
+        <Text style={pnStyles.body}>لم تُبلّغ عن أي تغيير منذ فترة. عند تغيّر الكهرباء في حيّك — اضغط{' '}<Text style={{ fontWeight: '800', color: T.accent }}>"الإبلاغ عن تغيير"</Text>{' '}لتُحسّن دقة توقعاتك وتساعد جيرانك. 🎯</Text>
       </View>
       <TouchableOpacity onPress={() => setShow(false)} style={pnStyles.dismissBtn}><Text style={pnStyles.dismissText}>✕</Text></TouchableOpacity>
     </View>
@@ -1112,22 +1102,12 @@ const sbStyles = StyleSheet.create({
 function useStableNextTransition(nt: UserPrediction['nextTransition'] | null | undefined) {
   const ref = useRef<{ key: string; rangeStartIso: string; rangeEndIso: string; rangeLabel: string } | null>(null);
   if (!nt) { ref.current = null; return nt ?? null; }
-  // Validate required fields to prevent crashes from malformed prediction data
-  if (
-    !nt.rangeStartIso ||
-    !nt.rangeEndIso ||
-    !nt.rangeLabel ||
-    Number.isNaN(Date.parse(nt.rangeStartIso))
-  ) {
-    ref.current = null;
-    return null;
-  }
-  const roundedStart = Math.round(new Date(nt.rangeStartIso!).getTime() / (5 * 60_000));
+  const roundedStart = Math.round(new Date(nt.rangeStartIso).getTime() / (5 * 60_000));
   const key = `${nt.type}|${roundedStart}`;
   if (!ref.current || ref.current.key !== key) {
-    ref.current = { key, rangeStartIso: nt.rangeStartIso!, rangeEndIso: nt.rangeEndIso!, rangeLabel: nt.rangeLabel! };
+    ref.current = { key, rangeStartIso: nt.rangeStartIso, rangeEndIso: nt.rangeEndIso, rangeLabel: nt.rangeLabel };
   }
-  return { ...nt, rangeStartIso: ref.current!.rangeStartIso, rangeEndIso: ref.current!.rangeEndIso, rangeLabel: ref.current!.rangeLabel };
+  return { ...nt, rangeStartIso: ref.current.rangeStartIso, rangeEndIso: ref.current.rangeEndIso, rangeLabel: ref.current.rangeLabel };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1215,7 +1195,7 @@ export default function Home() {
   }, [snapshot, saveOffset, clearResync, clearSnapshot, profile?.id, resyncPoint?.syncedAtIso]);
 
   const offsetMs = (offset?.offset_minutes ?? 0) * 60_000;
-  const anchorStartIso = (() => {
+  const computedAnchorStartIso = (() => {
     if ((userPrediction as any)?.reconciledCycleStartIso) return (userPrediction as any).reconciledCycleStartIso as string;
     if (userPrediction?.isResynced && userPrediction.resyncedAtIso) return userPrediction.resyncedAtIso;
     const atcMode = userPrediction?.atc?.mode;
@@ -1223,6 +1203,26 @@ export default function Home() {
     if (anchor && userPrediction && anchor.state === userPrediction.currentState) return new Date(new Date(anchor.startIso).getTime() + offsetMs).toISOString();
     return userPrediction?.currentStateStartIso ?? null;
   })();
+
+  // Stabilize the displayed anchor start so it doesn't drift between
+  // 30s-tick re-renders. The engine recomputes `userPrediction` every
+  // 30s, which can shift `currentStateStartIso` or the anchor-derived
+  // start by a few milliseconds (different Date.now() across renders).
+  // Without this guard, `useElapsedFromIso` would re-subscribe its
+  // interval on every such shift and the "since" label would visibly
+  // jump between renders. Here we only accept the new ISO if it differs
+  // from the previously displayed one by more than ±2 seconds.
+  const stableAnchorStartRef = useRef<string | null>(null);
+  if (computedAnchorStartIso) {
+    const newMs = new Date(computedAnchorStartIso).getTime();
+    const oldMs = stableAnchorStartRef.current ? new Date(stableAnchorStartRef.current).getTime() : null;
+    if (oldMs === null || Math.abs(newMs - oldMs) > 2_000) {
+      stableAnchorStartRef.current = computedAnchorStartIso;
+    }
+  } else {
+    stableAnchorStartRef.current = null;
+  }
+  const anchorStartIso = stableAnchorStartRef.current;
 
   const stableNextTransition = useStableNextTransition(userPrediction?.nextTransition);
   const stablePrediction = userPrediction ? { ...userPrediction, nextTransition: stableNextTransition } : null;
@@ -1282,7 +1282,7 @@ export default function Home() {
           </View>
           <View>
             <Text style={styles.greeting}>أهلاً، {displayName} 👋</Text>
-            <Text style={styles.date}>{safeToLocaleString(new Date().toISOString(), { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+            <Text style={styles.date}>{new Date().toLocaleDateString('ar-SA', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
           </View>
         </View>
 

@@ -37,3 +37,14 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+
+# ── Code-graph artifacts (local-only, regenerated per-session) ──
+graphify-out/
+build_graph.py
+
+# ── Local APK builds (shipped via gofile.io, not source-controlled) ──
+UtilityPowerNotify-release.apk
+*.apk
+
+# ── Generated lock files (we use pnpm-lock.yaml) ──
+package-lock.json
