@@ -1282,7 +1282,7 @@ export default function Home() {
           </View>
           <View>
             <Text style={styles.greeting}>أهلاً، {displayName} 👋</Text>
-            <Text style={styles.date}>{new Date().toLocaleDateString('ar-SA', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+            <Text style={styles.date}>{new Date().toLocaleDateString('ar-SA', { weekday: 'long' })}</Text>
           </View>
         </View>
 

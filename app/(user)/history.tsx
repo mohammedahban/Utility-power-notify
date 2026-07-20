@@ -81,10 +81,10 @@ function usePowerEventsHistory() {
 }
 
 function fmtEventTime(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
-    timeZone: 'Asia/Aden', weekday: 'short', month: 'short',
-    day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
-  }).replace('AM', ' ص').replace('PM', ' م');
+  return new Date(iso).toLocaleString('ar-SA', {
+    timeZone: 'Asia/Aden', weekday: 'long',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
 }
 
 function EventsHistorySection() {
@@ -315,8 +315,8 @@ function MiniBarChart({ entries }: { entries: OverrunEntry[] }) {
           }) ?? new Animated.Value(0);
 
           // Shorten date: "Jul 3" style
-          const dateLabel = new Date(entry.confirmed_at).toLocaleDateString('en-US', {
-            timeZone: 'Asia/Aden', month: 'short', day: 'numeric',
+          const dateLabel = new Date(entry.confirmed_at).toLocaleDateString('ar-SA', {
+            timeZone: 'Asia/Aden', weekday: 'long',
           });
 
           return (
@@ -405,10 +405,10 @@ const chartStyles = StyleSheet.create({
 });
 
 function fmtShortTime(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
-    timeZone: 'Asia/Aden', month: 'short', day: 'numeric',
+  return new Date(iso).toLocaleString('ar-SA', {
+    timeZone: 'Asia/Aden', weekday: 'long',
     hour: 'numeric', minute: '2-digit', hour12: true,
-  }).replace('AM', ' ص').replace('PM', ' م');
+  });
 }
 
 function fmtDeducted(min: number): string {

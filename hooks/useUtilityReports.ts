@@ -864,6 +864,26 @@ export function useUtilityReports() {
         }
       });
 
+      // V2.2 Fix: Update user_offsets so the reporter's offset is persisted.
+      // Without this, the engine uses the OLD offset value while the display
+      // shows the NEW offset from resync_history — causing mismatch.
+      const numericOffsetForUserRow = typeof offsetValue === 'number'
+        ? offsetValue
+        : 0; // PENDING → 0 placeholder
+      try {
+        await supabase
+          .from('user_offsets')
+          .upsert({
+            user_id: user!.id,
+            offset_minutes: numericOffsetForUserRow,
+            offset_state: offsetState,
+            offset_value: offsetValue,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'user_id' });
+      } catch (e) {
+        console.warn('[useUtilityReports] user_offsets upsert failed (non-fatal):', e);
+      }
+
       // Distribute push notifications to followers (non-blocking)
       supabase.functions.invoke('distribute-resync', {
         body: {

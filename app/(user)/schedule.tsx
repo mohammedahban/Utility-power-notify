@@ -168,7 +168,7 @@ function ScheduleBlock({ slot, index, resyncEvents, isActive, atcMode, isHolding
               <Text style={{ fontWeight: '700' }}>{resyncMatch.reporter_username ?? 'جار'}</Text>
               {' '}في{' '}
               {new Date(resyncMatch.effective_transition_at).toLocaleString('ar-SA', {
-                timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
+                timeZone: 'Asia/Aden', weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true,
               })}
             </Text>
           </View>
@@ -542,7 +542,7 @@ export default function ScheduleScreen() {
             let activeStartFormatted: string | undefined;
             if (isActive && mathematicalActiveStartIso) {
               activeStartFormatted = new Date(mathematicalActiveStartIso).toLocaleString('ar-SA', {
-                timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
+                timeZone: 'Asia/Aden', weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true,
               });
             }
 
@@ -642,7 +642,7 @@ export default function ScheduleScreen() {
         <Text style={styles.computedAt}>
           {AR.computedAt}{' '}
           {new Date(userPrediction.computedAt).toLocaleString('ar-SA', {
-            timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
+            timeZone: 'Asia/Aden', weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true,
           })}
         </Text>
       )}

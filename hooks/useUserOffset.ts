@@ -81,7 +81,7 @@ export function useUserOffset() {
     // Pending-negative resolution is written by the Growatt watcher. Keep the
     // operative scheduling offset in sync without requiring an app restart.
     const channel = supabase
-      .channel(`user_offset_${user.id}`)
+      .channel(`user_offset_hook_${user.id}`)
       .on(
         'postgres_changes',
         {
