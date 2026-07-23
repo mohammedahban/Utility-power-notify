@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>سياسة الخصوصية — متى تلصي؟ عدن</title>
+<style>
+body { font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.8; color: #333; }
+h1 { color: #0a0f1e; text-align: center; }
+h2 { color: #1e293b; border-bottom: 2px solid #38bdf8; padding-bottom: 8px; margin-top: 30px; }
+p, li { font-size: 15px; }
+ul { padding-right: 20px; }
+.contact { background: #f1f5f9; padding: 15px; border-radius: 10px; margin-top: 20px; }
+.en { direction: ltr; text-align: left; }
+</style>
+</head>
+<body>
+
+<h1>سياسة الخصوصية</h1>
+<p style="text-align:center; font-size:18px; font-weight:bold;">تطبيق "متى تلصي؟ عدن"</p>
+<p style="text-align:center;">آخر تحديث: 23 يوليو 2026</p>
+
+<h2>مقدمة</h2>
+<p>تطبيق "متى تلصي؟ عدن" هو تطبيق يتنبأ بأوقات تشغيل وانقطاع الكهرباء في مدينة عدن باستخدام بيانات حساس Growatt ومحرك التنبؤ TMMS. نحن نحترم خصوصيتك ونلتزم بحماية بياناتك الشخصية. توضح هذه السياسة كيف نجمع بياناتك ونستخدمها ونحميها.</p>
+
+<h2>1. البيانات التي نجمعها</h2>
+<ul>
+<li><strong>بيانات الحساب:</strong> البريد الإلكتروني وكلمة المرور (مشفّرة) لإنشاء حساب وتسجيل الدخول.</li>
+<li><strong>الموقع الجغرافي:</strong> موقعك التقريبي (GPS) لإيجاد المستخدمين القريبين ضمن نطاق 0.5 كم لمشاركة بلاغات الكهرباء المجتمعية. لا نخزّن موقعك بشكل دائم.</li>
+<li><strong>رمز الإشعارات (Push Token):</strong> رمز فريد لإرسال إشعارات فورية عند تغيّر حالة الكهرباء أو تلقي بلاغات مجتمعية.</li>
+<li><strong>بلاغات الكهرباء:</strong> عندما تقدّم بلاغاً عن تشغيل أو انقطاع الكهرباء، نسجّل وقت البلاغ ونوعه وفارقك الزمني (offset).</li>
+<li><strong>بيانات الحساس:</strong> حالة حساس Growatt (تشغيل/انقطاع، الجهد، القدرة) لعرضها في التطبيق والتنبؤ بالدورات القادمة.</li>
+<li><strong>درجة الموثوقية:</strong> نقطة رقمية تعكس دقة بلاغاتك السابقة مقارنة بالحالة الفعلية.</li>
+</ul>
+
+<h2>2. كيف نستخدم بياناتك</h2>
+<ul>
+<li>عرض حالة الكهرباء الحالية والتنبؤ بالدورات القادمة في منطقتك.</li>
+<li>إرسال إشعارات فورية عند تغيّر حالة الكهرباء.</li>
+<li>مشاركة بلاغاتك مع المستخدمين القريبين منك (بدون كشف هويتك للمستخدمين العاديين).</li>
+<li>حساب الفارق الزمني (offset) بين وقت الكهرباء في منزلك ووقت حساس Growatt.</li>
+<li>تحسين دقة التنبؤات عبر محرك TMMS.</li>
+</ul>
+
+<h2>3. من يصل إلى بياناتك</h2>
+<ul>
+<li><strong>أنت:</strong> يمكنك الوصول إلى بياناتك وتعديلها في أي وقت.</li>
+<li><strong>المستخدمون القريبون:</strong> يرون بلاغاتك (وقت البلاغ ونوعه) دون كشف هويتك الشخصية، باستثناء اسم المستخدم ودرجة الموثوقية.</li>
+<li><strong>مديرو النظام:</strong> يمكنهم الوصول إلى بيانات تشغيلية لتشخيص المشكلات وتحسين الخدمة.</li>
+<li><strong>مزودو الخدمات:</strong> Supabase (قاعدة البيانات والمصادقة)، وExpo Push Notifications (الإشعارات). لا نشارك بياناتك مع أطراف ثالثة لأغراض تسويقية.</li>
+</ul>
+
+<h2>4. تخزين البيانات وحمايتها</h2>
+<ul>
+<li>تُخزَّن البيانات في قاعدة بيانات Supabase المستضافة على خوادم آمنة.</li>
+<li>كلمات المرور مشفّرة بواسطة Supabase Auth.</li>
+<li>نستخدم سياسات Row-Level Security (RLS) للتأكد من أن كل مستخدم يصل فقط إلى بياناته.</li>
+<li>لا نخزّن بيانات بطاقات ائتمانية أو معلومات مالية.</li>
+</ul>
+
+<h2>5. الإشعارات</h2>
+<p>يستخدم التطبيق إشعارات فورية لإبلاغك بـ:</p>
+<ul>
+<li>تغيّر حالة الكهرباء (تشغيل/انقطاع) — للمستخدمين المُعلَّين كمشرفين.</li>
+<li>بلاغات الكهرباء من المستخدمين القريبين.</li>
+<li>تنبيهات مجتمعية عند تأكيد بلاغ من مستخدمين موثوقين.</li>
+</ul>
+<p>يمكنك إيقاف الإشعارات من إعدادات جهازك في أي وقت.</p>
+
+<h2>6. حذف البيانات</h2>
+<p>يمكنك طلب حذف حسابك وجميع بياناتك المرتبطة به في أي وقت عبر التواصل معنا. سيتم حذف:</p>
+<ul>
+<li>بيانات حسابك ومعلومات الملف الشخصي.</li>
+<li>بلاغاتك السابقة وسجل المزامنة.</li>
+<li>الفارق الزمني المحسوب (offset).</li>
+<li>رمز الإشعارات الخاص بك.</li>
+</ul>
+
+<h2>7. حقوقك</h2>
+<ul>
+<li>الوصول إلى بياناتك.</li>
+<li>تصحيح البيانات غير الصحيحة.</li>
+<li>طلب حذف حسابك وبياناتك.</li>
+<li>إلغاء الاشتراك في الإشعارات.</li>
+<li>الانسحاب من ميزة الموقع الجغرافي.</li>
+</ul>
+
+<h2>8. الأطفال</h2>
+<p>التطبيق غير مُصمَّم للاستخدام من قبل الأطفال دون سن 13 عاماً. لا نجمع عمداً بيانات من الأطفال.</p>
+
+<h2>9. التغييرات على هذه السياسة</h2>
+<p>قد نحدّث سياسة الخصوصية من وقت لآخر. سننشر أي تغييرات على هذه الصفحة مع تحديث تاريخ "آخر تحديث" في الأعلى.</p>
+
+<h2>10. التواصل معنا</h2>
+<div class="contact">
+<p>لأي استفسارات حول سياسة الخصوصية، يرجى التواصل:</p>
+<p>📧 البريد الإلكتروني: <strong>lythmaa@gmail.com</strong></p>
+</div>
+
+<hr style="margin-top:40px;">
+
+<h2 class="en">Privacy Policy (English Summary)</h2>
+<div class="en">
+<p><strong>App:</strong> "Mata Talci? Aden" (When does it turn on? Aden)</p>
+<p><strong>Last updated:</strong> July 23, 2026</p>
+<p>This app collects: account credentials, approximate GPS location (for nearby user matching within 0.5km), push notification tokens, electricity status reports, Growatt sensor data, and reliability scores. Data is stored securely via Supabase with Row-Level Security. We do not sell or share your data with third parties for marketing. You can request data deletion at any time by contacting lythmaa@gmail.com.</p>
+</div>
+
+</body>
+</html>
