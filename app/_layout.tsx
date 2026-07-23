@@ -126,7 +126,10 @@ function AuthGate() {
   // This covers both the initial getSession() call AND the token-refresh
   // path, so the user never sees a flash of /login when their session is
   // actually being recovered.
-  if (loading || !onboardingChecked) {
+  // CRITICAL: Also keep splash while session exists but profile hasn't loaded yet.
+  // Without this, the Stack renders briefly with a stale route (e.g. /(admin))
+  // before AuthGate's redirect fires — causing the admin dashboard flash.
+  if (loading || !onboardingChecked || (session && !profile)) {
     return (
       <View style={{ flex: 1, backgroundColor: '#060d1a', alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator size="large" color="#38bdf8" />

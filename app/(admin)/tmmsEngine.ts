@@ -673,6 +673,35 @@ function computeATCMode(
   //   NEGATIVE offset → PREDICTION_RANGE (preparing for UNCERTAIN_ZONE)
   //     The user is about to enter UNCERTAIN_ZONE when the slot ends.
   //     The prediction range badge warns the user that uncertainty is coming.
+  //
+  // CRITICAL: For NEGATIVE offset users, if the active slot is ON but Growatt
+  // hasn't confirmed ON yet, we MUST hold OFF (UNCERTAIN_ZONE). The shifted
+  // schedule has the ON slot starting earlier (by |offset|), but the user
+  // should NOT auto-flip to ON — they must wait for Growatt confirmation.
+  if (activeSlot && offsetMinutes < 0 && activeSlot.state === 'ON' && growattCurrentState === 'OFF') {
+    // Find the just-ended OFF slot for the held-state anchor
+    const endedOffSlot = shiftedSlots
+      .filter(s => s.state === 'OFF' && s.endIso && new Date(s.endIso).getTime() <= nowMs)
+      .sort((a, b) => new Date(b.endIso!).getTime() - new Date(a.endIso!).getTime())[0] ?? null;
+    const heldStartIso = endedOffSlot?.startIso ?? activeSlot.startIso;
+    const slotEndMs = endedOffSlot?.endIso ? new Date(endedOffSlot.endIso).getTime() : nowMs;
+    const overrunMin = Math.max(0, Math.round((nowMs - slotEndMs) / 60_000));
+    return {
+      mode: overrunMin <= 5 ? 'GRACE_MODE' : (overrunMin <= GRACE_MODE_MAX_MIN ? 'UNCERTAIN_ZONE' : 'WAITING_FOR_GROWATT'),
+      currentState: 'OFF',
+      currentStateStartIso: heldStartIso,
+      isHoldingState: true,
+      overrunMinutes: overrunMin,
+      communityElevated: overrunMin >= PREDICTION_RANGE_MIN,
+      inValidationWindow: false,
+      validationWindowRemainingMin: 0,
+      scheduledAutoTransitionIso: null,
+      statusLine: overrunMin <= 5
+        ? `مهلة المزامنة — تجاوزنا الجدول بـ ${overrunMin} دقيقة`
+        : `غير مؤكد — تجاوزنا الجدول بـ ${overrunMin} دقيقة`,
+    };
+  }
+
   if (activeSlot?.endIso) {
     const endMs = new Date(activeSlot.endIso).getTime();
     const minutesUntilEnd = (endMs - nowMs) / 60_000;

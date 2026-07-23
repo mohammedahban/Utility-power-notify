@@ -259,13 +259,31 @@ const goStyles = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 function PendingNegativeBanner({ prediction }: { prediction: UserPrediction | null }) {
   const isPending = prediction?.isPendingNegative ?? false;
+  const resolutionIso = prediction?.pendingNegativeResolutionIso ?? null;
   if (!isPending) return null;
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  let countdownLabel = 'بانتظار تحوّل Growatt القادم';
+  if (resolutionIso) {
+    const ms = new Date(resolutionIso).getTime() - Date.now();
+    if (ms > 0) {
+      const h = Math.floor(ms / 3600000); const m = Math.floor((ms % 3600000) / 60000); const s = Math.floor((ms % 60000) / 1000);
+      countdownLabel = `≈ ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    } else { countdownLabel = 'الآن — بانتظار Growatt'; }
+  }
   return (
     <View style={pn2Styles.banner}>
       <View style={pn2Styles.iconWrap}><Text style={{ fontSize: 22 }}>⏳</Text></View>
       <View style={{ flex: 1 }}>
         <Text style={pn2Styles.title}>فارق معلَّق (Pending Negative)</Text>
         <Text style={pn2Styles.body}>بلاغك أو بلاغ المُبلِّغ وصل في النصف الثاني من فترة الانطفاء المتوقّعة. الفارق الزمني سيُحسب تلقائياً بمجرد أن يتحوّل Growatt إلى تشغيل.</Text>
+        <View style={pn2Styles.countdownRow}>
+          <Text style={pn2Styles.countdownLabel}>توقّع الحل:</Text>
+          <Text style={pn2Styles.countdownValue}>{countdownLabel}</Text>
+        </View>
         <Text style={pn2Styles.note}>⚠ تنبؤات التشغيل القادمة تُعرض كـ "تقديري (فارق معلّق)" حتى يُحلّ الفارق.</Text>
       </View>
     </View>
@@ -276,6 +294,9 @@ const pn2Styles = StyleSheet.create({
   iconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: T.elevated, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   title: { color: T.warning, fontSize: 12, fontWeight: '800', letterSpacing: 0.5, textAlign: 'right', marginBottom: 5 },
   body: { color: T.textSecondary, fontSize: 12, lineHeight: 18, textAlign: 'right', marginBottom: 8 },
+  countdownRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, marginBottom: 6 },
+  countdownLabel: { color: T.textMuted, fontSize: 10, fontWeight: '600' },
+  countdownValue: { color: T.warning, fontSize: 16, fontWeight: '900', letterSpacing: 1, fontVariant: ['tabular-nums'] },
   note: { color: T.warning + 'aa', fontSize: 10, fontStyle: 'italic', textAlign: 'right' },
 });
 
@@ -604,9 +625,14 @@ function PersonalStatusCard({ prediction, anchorStartIso, onRevertToGrowatt, has
                   <Text style={psStyles.liveClockLabel}>وقت الانتظار الفعلي</Text>
                   <Text style={psStyles.liveClockValue}>{overrunLiveClock}</Text>
                 </View>
-                <Text style={psStyles.deductionNote}>سيُخصم من مدة التشغيل القادمة</Text>
-                <Text style={psStyles.uncertainHintLine}>💡 قد تشتعل الكهرباء في أي لحظة — أرسل بلاغاً عند عودتها</Text>
+                <Text style={psStyles.deductionNote}>سيُخصم |الفارق| من مدة التشغيل القادمة</Text>
               </View>
+            )}
+            {/* Helpful hint: power may come on at any moment */}
+            {isUncertain && (
+              <Text style={[psStyles.atcBodyLine, { color: cfg.textColor + 'aa' }]}>
+                💡 قد تشتغل الكهرباء في منزلك في أي لحظة — بمجرد أن تشتغل، قدّم بلاغاً لتأكيد التغيير
+              </Text>
             )}
             {isUncertain && tMode === 'MANUAL' && (
               <Text style={[psStyles.atcBodyLine, { color: cfg.textColor + 'aa' }]}>وضع يدوي — بلاغك أو تأكيد مجتمعي ينهي الدورة</Text>
@@ -666,7 +692,6 @@ const psStyles = StyleSheet.create({
   liveClockRow: { flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1a0a00', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8 },
   liveClockLabel: { color: T.warning + '99', fontSize: 10, fontWeight: '600' },
   liveClockValue: { color: T.warning, fontSize: 22, fontWeight: '900', fontVariant: ['tabular-nums'], letterSpacing: 2 },
-  uncertainHintLine: { color: T.warning + 'cc', fontSize: 11, fontWeight: '600', textAlign: 'right', marginTop: 6, lineHeight: 16 },
   deductionNote: { color: T.warning + 'cc', fontSize: 11, fontWeight: '600', textAlign: 'right', fontStyle: 'italic' },
   reasoningBox: { backgroundColor: T.elevated, borderRadius: 10, padding: 10, marginTop: 8, borderWidth: 1, borderColor: T.border },
   reasoningText: { color: T.textMuted, fontSize: 11, lineHeight: 17, textAlign: 'right' },
@@ -854,45 +879,30 @@ function TodayTimeline({ prediction, anchorStartIso }: { prediction: UserPredict
   const slots = prediction?.daySchedule ?? [];
   const nowMs = Date.now();
   const atcMode = prediction?.atc?.mode;
-  const isHolding = prediction?.atc?.isHoldingState === true;
   const isPositiveOffsetPending = atcMode === 'POSITIVE_OFFSET_PENDING';
-  const isUncertainFamily =
-    isHolding &&
-    (atcMode === 'UNCERTAIN_ZONE' ||
-      atcMode === 'WAITING_FOR_GROWATT' ||
-      atcMode === 'GRACE_MODE');
-
-  // During UNCERTAIN_ZONE the OFF slot has ended but we must NOT auto-jump
-  // to the next future ON slot. Anchor to the most-recently-ended OFF slot so
-  // the timeline stays visibly OFF until Growatt actually turns ON.
+  const isHoldingOff = prediction?.isHoldingState === true && prediction?.currentState === 'OFF' &&
+    (atcMode === 'UNCERTAIN_ZONE' || atcMode === 'GRACE_MODE' || atcMode === 'WAITING_FOR_GROWATT');
   const activeIdx = (() => {
     if (isPositiveOffsetPending && slots.length > 0) return 0;
-    const live = slots.findIndex(s => {
-      const start = new Date(s.startIso).getTime();
-      const end = s.endIso ? new Date(s.endIso).getTime() : Infinity;
-      return nowMs >= start && nowMs < end;
-    });
-    if (live >= 0) return live;
-    if (isUncertainFamily) {
-      // Hold at the last ended OFF slot during UNCERTAIN_ZONE
-      const lastEndedOff = (() => {
-        for (let i = slots.length - 1; i >= 0; i--) {
-          const s = slots[i];
-          if (s.state !== 'OFF' || !s.endIso) continue;
-          if (new Date(s.endIso).getTime() <= nowMs) return i;
+    // During UNCERTAIN_ZONE: the OFF slot has ended but engine holds OFF.
+    // Find the just-ended OFF slot instead of jumping to the next ON slot.
+    if (isHoldingOff) {
+      const endedOffIdx = slots.reduce((bestIdx: number, s, i) => {
+        if (s.state !== 'OFF' || !s.endIso) return bestIdx;
+        const endMs = new Date(s.endIso).getTime();
+        if (endMs <= nowMs) {
+          if (bestIdx === -1) return i;
+          const bestEnd = slots[bestIdx].endIso ? new Date(slots[bestIdx].endIso!).getTime() : 0;
+          return endMs > bestEnd ? i : bestIdx;
         }
-        return -1;
-      })();
-      if (lastEndedOff >= 0) return lastEndedOff;
+        return bestIdx;
+      }, -1);
+      if (endedOffIdx >= 0) return endedOffIdx;
     }
-    return -1;
+    return slots.findIndex(s => { const start = new Date(s.startIso).getTime(); const end = s.endIso ? new Date(s.endIso).getTime() : Infinity; return nowMs >= start && nowMs < end; });
   })();
 
-  const startIdx = activeIdx >= 0
-    ? activeIdx
-    : (isUncertainFamily
-        ? -1  // Don't fall forward to future ON during UNCERTAIN_ZONE
-        : slots.findIndex(s => new Date(s.startIso).getTime() > nowMs));
+  const startIdx = activeIdx >= 0 ? activeIdx : slots.findIndex(s => new Date(s.startIso).getTime() > nowMs);
   const displaySlots = startIdx >= 0 ? slots.slice(startIdx, startIdx + 4) : slots.slice(0, 4);
   if (displaySlots.length === 0) return null;
 
@@ -902,17 +912,7 @@ function TodayTimeline({ prediction, anchorStartIso }: { prediction: UserPredict
       {displaySlots.map((slot, i) => {
         const isActive = i === 0 && activeIdx >= 0;
         const isOn = slot.state === 'ON'; const color = isOn ? T.success : T.danger;
-        // Stable key: by state + index-in-displaySlots + duration bucket.
-        // Previously the key used `Math.round(startMs / 60_000)`, which
-        // broke whenever the engine re-computed the schedule and the
-        // slot's startIso shifted by >30s (e.g. 10:00:31 → 10:01). That
-        // caused the "stable" start map to miss → displayed start time
-        // would jump every ~30s when the tick re-rendered the schedule.
-        // Index-within-state is stable across engine re-computes as long
-        // as the slots' positions relative to each other don't reorder —
-        // which they don't unless offset/resync changes (and we clear
-        // the maps on those events above).
-        const slotKey = `${slot.state}|${i}|${slot.durationLabel ?? 'x'}`;
+        const slotKey = `${slot.state}|${Math.round(new Date(slot.startIso).getTime() / 60_000)}`;
         let currentStartF: string;
         if (isActive && isPositiveOffsetPending && anchorStartIso) {
           currentStartF = new Date(anchorStartIso).toLocaleString('en-US', { timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true }).replace('AM', ' ص').replace('PM', ' م');
@@ -1195,7 +1195,7 @@ export default function Home() {
   }, [snapshot, saveOffset, clearResync, clearSnapshot, profile?.id, resyncPoint?.syncedAtIso]);
 
   const offsetMs = (offset?.offset_minutes ?? 0) * 60_000;
-  const computedAnchorStartIso = (() => {
+  const anchorStartIso = (() => {
     if ((userPrediction as any)?.reconciledCycleStartIso) return (userPrediction as any).reconciledCycleStartIso as string;
     if (userPrediction?.isResynced && userPrediction.resyncedAtIso) return userPrediction.resyncedAtIso;
     const atcMode = userPrediction?.atc?.mode;
@@ -1203,26 +1203,6 @@ export default function Home() {
     if (anchor && userPrediction && anchor.state === userPrediction.currentState) return new Date(new Date(anchor.startIso).getTime() + offsetMs).toISOString();
     return userPrediction?.currentStateStartIso ?? null;
   })();
-
-  // Stabilize the displayed anchor start so it doesn't drift between
-  // 30s-tick re-renders. The engine recomputes `userPrediction` every
-  // 30s, which can shift `currentStateStartIso` or the anchor-derived
-  // start by a few milliseconds (different Date.now() across renders).
-  // Without this guard, `useElapsedFromIso` would re-subscribe its
-  // interval on every such shift and the "since" label would visibly
-  // jump between renders. Here we only accept the new ISO if it differs
-  // from the previously displayed one by more than ±2 seconds.
-  const stableAnchorStartRef = useRef<string | null>(null);
-  if (computedAnchorStartIso) {
-    const newMs = new Date(computedAnchorStartIso).getTime();
-    const oldMs = stableAnchorStartRef.current ? new Date(stableAnchorStartRef.current).getTime() : null;
-    if (oldMs === null || Math.abs(newMs - oldMs) > 2_000) {
-      stableAnchorStartRef.current = computedAnchorStartIso;
-    }
-  } else {
-    stableAnchorStartRef.current = null;
-  }
-  const anchorStartIso = stableAnchorStartRef.current;
 
   const stableNextTransition = useStableNextTransition(userPrediction?.nextTransition);
   const stablePrediction = userPrediction ? { ...userPrediction, nextTransition: stableNextTransition } : null;
@@ -1282,7 +1262,7 @@ export default function Home() {
           </View>
           <View>
             <Text style={styles.greeting}>أهلاً، {displayName} 👋</Text>
-            <Text style={styles.date}>{new Date().toLocaleDateString('ar-SA', { weekday: 'long' })}</Text>
+            <Text style={styles.date}>{new Date().toLocaleDateString('ar-SA', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
           </View>
         </View>
 

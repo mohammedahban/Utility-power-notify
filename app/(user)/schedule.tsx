@@ -382,8 +382,25 @@ export default function ScheduleScreen() {
   // For isReconciledFlip: the first ON slot in the schedule whose startIso is
   // closest to reconciledStartIso is the active slot (it may be at index 0 if
   // useUserPredictions injected the synthetic slot there).
+  const isHoldingOff = userPrediction?.isHoldingState === true && userPrediction?.currentState === 'OFF' &&
+    (atcMode === 'UNCERTAIN_ZONE' || atcMode === 'GRACE_MODE' || atcMode === 'WAITING_FOR_GROWATT');
   const activeIdx = (() => {
     if (isPositiveOffsetPending && allSlots.length > 0) return 0;
+    // During UNCERTAIN_ZONE: the OFF slot has ended but engine holds OFF.
+    // Find the just-ended OFF slot instead of jumping to the next ON slot.
+    if (isHoldingOff) {
+      const endedOffIdx = allSlots.reduce((bestIdx: number, s, i) => {
+        if (s.state !== 'OFF' || !s.endIso) return bestIdx;
+        const endMs = new Date(s.endIso).getTime();
+        if (endMs <= nowMs) {
+          if (bestIdx === -1) return i;
+          const bestEnd = allSlots[bestIdx].endIso ? new Date(allSlots[bestIdx].endIso!).getTime() : 0;
+          return endMs > bestEnd ? i : bestIdx;
+        }
+        return bestIdx;
+      }, -1);
+      if (endedOffIdx >= 0) return endedOffIdx;
+    }
     if (isReconciledFlip && reconciledStartIso) {
       // Find the ON slot that best represents the reconciledCycleStartIso anchor.
       // The synthetic slot injected by useUserPredictions has startIso = reconciledStartIso,

@@ -136,59 +136,7 @@ function applyGeneratedOnToSchedule(
   if (!generatedOn) return schedule;
   const startMs = new Date(generatedOn.startIso).getTime();
   const endMs = startMs + generatedOn.durationMin * 60_000;
-
-  // ── Generated ON cycle has ended (selectedTime > onDuration) ────────────
-  // The user has consumed the full ON duration and is now in OFF. Inject a
-  // synthetic OFF slot anchored at the cycle end, running until the next
-  // upcoming Growatt-scheduled ON. This makes PersonalStatusCard and
-  // TodayTimeline correctly show the user's actual position (e.g. "2h into
-  // OFF") instead of falling through to the raw Growatt schedule.
-  if (endMs <= nowMs) {
-    // Find the next Growatt-scheduled ON that starts after the cycle end.
-    const nextGrowattOn = schedule
-      .filter(s => s.state === 'ON' && new Date(s.startIso).getTime() > endMs)
-      .sort((a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime())[0];
-    const offEndIso = nextGrowattOn?.startIso ?? new Date(endMs + 6 * 3600_000).toISOString(); // fallback 6h
-
-    // If a slot already exists starting at cycleEnd, don't duplicate.
-    const existingOff = schedule.find(s =>
-      s.state === 'OFF' &&
-      Math.abs(new Date(s.startIso).getTime() - endMs) < 60_000,
-    );
-    if (existingOff) {
-      const updated = [...schedule];
-      const idx = updated.indexOf(existingOff);
-      updated[idx] = { ...existingOff, isGeneratedOn: false, startIso: new Date(endMs).toISOString() };
-      return updated;
-    }
-
-    const refSlotInside = schedule[0];
-    const fmt = (iso: string) => new Date(iso).toLocaleString('en-US', {
-      timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
-    }).replace('AM', ' ص').replace('PM', ' م');
-    const syntheticOff: ShiftedScheduleSlot = {
-      state: 'OFF',
-      startIso: new Date(endMs).toISOString(),
-      endIso: offEndIso,
-      startFormatted: fmt(new Date(endMs).toISOString()),
-      endFormatted: fmt(offEndIso),
-      shiftedStartFormatted: fmt(new Date(endMs).toISOString()),
-      shiftedEndFormatted: fmt(offEndIso),
-      durationLabel: 'مُولَّد',
-      zone: refSlotInside?.zone ?? 'NIGHT',
-      isEstimated: false,
-      isGeneratedOn: false,
-    } as ShiftedScheduleSlot;
-    // Insert before all future slots, remove any slots that overlap.
-    const filtered = schedule.filter(s => {
-      const sEnd = s.endIso ? new Date(s.endIso).getTime() : Infinity;
-      return sEnd <= endMs; // keep only slots that ended before cycle end
-    });
-    return [...filtered, syntheticOff, ...schedule.filter(s => {
-      const sStart = new Date(s.startIso).getTime();
-      return sStart >= new Date(offEndIso).getTime();
-    })];
-  }
+  if (endMs < nowMs) return schedule;
 
   const existingIdx = schedule.findIndex(s =>
     Math.abs(new Date(s.startIso).getTime() - startMs) < 60_000,
@@ -199,7 +147,39 @@ function applyGeneratedOnToSchedule(
     return updated;
   }
 
-  const refSlot = schedule[0];
+  // Remove any slots that OVERLAP with the Generated ON time range.
+  // This prevents duplicate ON/OFF slots from appearing in the timeline
+  // and schedule page. A slot overlaps if its time range intersects
+  // [startMs, endMs).
+  const filtered = schedule.filter(s => {
+    const sStart = new Date(s.startIso).getTime();
+    const sEnd = s.endIso ? new Date(s.endIso).getTime() : Infinity;
+    // No overlap if slot ends before Generated ON starts, or starts after it ends
+    return !(sEnd <= startMs || sStart >= endMs);
+  }).map(s => {
+    // Clip slots that partially overlap (start before Generated ON but end inside it)
+    const sStart = new Date(s.startIso).getTime();
+    const sEnd = s.endIso ? new Date(s.endIso).getTime() : Infinity;
+    if (sStart < startMs && sEnd > startMs && sEnd < endMs) {
+      // Slot ends inside Generated ON — clip its end to the Generated ON start
+      const clippedEndIso = new Date(startMs).toISOString();
+      const fmtClip = (iso: string) => new Date(iso).toLocaleString('en-US', {
+        timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
+      }).replace('AM', ' ص').replace('PM', ' م');
+      return { ...s, endIso: clippedEndIso, endFormatted: fmtClip(clippedEndIso), shiftedEndFormatted: fmtClip(clippedEndIso) };
+    }
+    // Slot starts inside Generated ON but ends after — clip its start
+    if (sStart >= startMs && sStart < endMs && sEnd > endMs) {
+      const clippedStartIso = new Date(endMs).toISOString();
+      const fmtClip = (iso: string) => new Date(iso).toLocaleString('en-US', {
+        timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
+      }).replace('AM', ' ص').replace('PM', ' م');
+      return { ...s, startIso: clippedStartIso, startFormatted: fmtClip(clippedStartIso), shiftedStartFormatted: fmtClip(clippedStartIso) };
+    }
+    return s;
+  });
+
+  const refSlot = filtered[0] ?? schedule[0];
   const fmt = (iso: string) => new Date(iso).toLocaleString('en-US', {
     timeZone: 'Asia/Aden', hour: 'numeric', minute: '2-digit', hour12: true,
   }).replace('AM', ' ص').replace('PM', ' م');
@@ -218,7 +198,7 @@ function applyGeneratedOnToSchedule(
     isEstimated: false,
     isGeneratedOn: true,
   } as ShiftedScheduleSlot;
-  return [synthetic, ...schedule];
+  return [synthetic, ...filtered];
 }
 
 // ── V2.1 CORRECTED: no-op (PENDING_NEGATIVE never produced by engine) ──────
@@ -230,7 +210,15 @@ function markEstimatedPendingOffset(
   return schedule;
 }
 
-// ── V2.2 (#4): UNCERTAIN_ZONE exceeded-time deduction ────────────────────
+// ── V2.2 (#4): UNCERTAIN_ZONE offset-value deduction ───────────────────────
+// The deduction = |offsetMinutes| (the negative offset value), NOT the
+// exceeded/overrun time. The offset is fixed between user ON start and
+// Growatt ON start.
+// Example: offset = -45, ON duration = 120 min
+//   → deduct 45 from ON → ON becomes 75 min
+// Example: offset = -150, ON duration = 120 min
+//   → deduct 120 from ON (all of it), remaining 30 deducted from next OFF
+//   → currentState = OFF, elapsed 30 min into OFF
 const UNCERTAIN_ZONE_ENTRY_KEY = 'tmms_uncertain_zone_entry_iso';
 const UNCERTAIN_DEDUCTION_CAP_MS = 6 * 3600_000;
 
@@ -238,114 +226,109 @@ function applyUncertainZoneDeduction(
   pred: UserPrediction,
   entryIso: string,
   nowMs: number,
+  offsetMinutes: number,
 ): UserPrediction {
+  const deductionMin = Math.abs(offsetMinutes);
+  if (deductionMin <= 0) return pred;
+
   const entryMs = new Date(entryIso).getTime();
   if (!Number.isFinite(entryMs)) return pred;
+  if (nowMs - entryMs > UNCERTAIN_DEDUCTION_CAP_MS) return pred;
+
   const slots = (pred.daySchedule ?? []) as ShiftedScheduleSlot[];
 
-  const idx = slots.findIndex(s => {
+  // Find the current ON slot (the one the user just entered)
+  const onIdx = slots.findIndex(s => {
     const st = new Date(s.startIso).getTime();
     const en = s.endIso ? new Date(s.endIso).getTime() : Infinity;
     return s.state === 'ON' && nowMs >= st && nowMs < en;
   });
-  if (idx < 0) return pred;
-  const slot = slots[idx];
-  if (!slot.endIso) return pred;
+  if (onIdx < 0) return pred;
+  const onSlot = slots[onIdx];
+  if (!onSlot.endIso) return pred;
 
-  const oldStartMs = new Date(slot.startIso).getTime();
-  const oldEndMs = new Date(slot.endIso).getTime();
-  if (entryMs >= oldStartMs) return pred;
-  if (oldStartMs - entryMs > UNCERTAIN_DEDUCTION_CAP_MS) return pred;
+  const onDurationMs = new Date(onSlot.endIso).getTime() - new Date(onSlot.startIso).getTime();
+  const onDeductionMs = Math.min(deductionMin * 60_000, onDurationMs);
+  const overflowMs = deductionMin * 60_000 - onDeductionMs;
 
-  const spanMs = oldEndMs - oldStartMs;
-  const exceededMs = oldStartMs - entryMs; // total exceeded waiting time
-  const newStartMs = entryMs;
+  // Shorten the ON slot: start stays, end moves forward by onDeductionMs
+  const newOnEndMs = new Date(onSlot.endIso).getTime() - onDeductionMs;
 
-  // Carry-to-OFF: if exceeded time > ON duration, the remainder carries into
-  // the next OFF slot. The ON slot gets a zero-length or shortened duration,
-  // and the next OFF slot's start is pulled earlier (its duration reduced by
-  // the remainder).
-  let newEndMs: number;
-  let offCarryMs = 0; // remainder to deduct from next OFF
-  if (exceededMs >= spanMs) {
-    // Exceeded time fully consumes the ON duration — ON slot collapses to
-    // zero length and the surplus carries to the next OFF.
-    newEndMs = newStartMs; // ON slot has no real duration
-    offCarryMs = exceededMs - spanMs;
-  } else {
-    newEndMs = newStartMs + spanMs;
-  }
-  const delta = newEndMs - oldEndMs;
+  const newSlots = [...slots];
 
-  const newSlots = slots.map((s, i) => {
-    if (i < idx) return s;
-    const stMs = i === idx ? newStartMs : new Date(s.startIso).getTime() + delta;
-    const enMs = i === idx ? newEndMs : (s.endIso ? new Date(s.endIso).getTime() + delta : null);
+  // If the deduction eats all of ON and there's overflow → user is in OFF
+  let currentState = pred.currentState;
+  let currentStateStartIso = pred.currentStateStartIso;
 
-    // Apply carry-to-OFF: find the first OFF slot AFTER the ON slot and
-    // pull its start earlier by offCarryMs (reducing its duration).
-    let finalStMs = stMs;
-    let finalEnMs = enMs;
-    if (offCarryMs > 0 && i > idx && s.state === 'OFF' && enMs !== null) {
-      finalStMs = stMs - offCarryMs;
-      finalEnMs = enMs;
-      offCarryMs = 0; // apply only once, to the first OFF slot
+  if (overflowMs > 0) {
+    // ON fully consumed → user is now in OFF, elapsed = overflow
+    // Find the next OFF slot
+    const offIdx = newSlots.findIndex((s, i) => i > onIdx && s.state === 'OFF');
+    if (offIdx >= 0) {
+      const offSlot = newSlots[offIdx];
+      const offStartMs = new Date(offSlot.startIso).getTime();
+      const newOffStartMs = newOnEndMs; // OFF starts right after shortened ON ends
+      const newSlots2 = newSlots.map((s, i) => {
+        if (i === onIdx) {
+          return { ...s, endIso: new Date(newOnEndMs).toISOString() };
+        }
+        if (i === offIdx) {
+          // Shorten OFF by overflow
+          const offEndMs = offSlot.endIso ? new Date(offSlot.endIso).getTime() : Infinity;
+          const newOffEndMs = offEndMs - overflowMs;
+          const newEndIso = new Date(newOffEndMs).toISOString();
+          return {
+            ...s,
+            startIso: new Date(newOffStartMs).toISOString(),
+            endIso: newEndIso,
+          };
+        }
+        return s;
+      });
+      currentState = 'OFF';
+      currentStateStartIso = new Date(newOffStartMs).toISOString();
+      return {
+        ...pred,
+        daySchedule: newSlots2,
+        currentState,
+        currentStateStartIso,
+        reconciledCycleStartIso: currentStateStartIso,
+      } as UserPrediction;
     }
+  }
 
-    const stIso = new Date(finalStMs).toISOString();
-    const enIso = finalEnMs !== null ? new Date(finalEnMs).toISOString() : null;
-    return {
+  // Normal case: deduct from ON only
+  newSlots[onIdx] = {
+    ...onSlot,
+    endIso: new Date(newOnEndMs).toISOString(),
+  };
+
+  // Shift subsequent slots backward by onDeductionMs
+  for (let i = onIdx + 1; i < newSlots.length; i++) {
+    const s = newSlots[i];
+    const stMs = new Date(s.startIso).getTime() - onDeductionMs;
+    const enMs = s.endIso ? new Date(s.endIso).getTime() - onDeductionMs : null;
+    newSlots[i] = {
       ...s,
-      startIso: stIso,
-      endIso: enIso,
-      startFormatted: fmtYemenTime(stIso),
-      endFormatted: enIso ? fmtYemenTime(enIso) : null,
-      shiftedStartFormatted: fmtYemenTime(stIso),
-      shiftedEndFormatted: enIso ? fmtYemenTime(enIso) : null,
-    };
-  });
-
-  const active = newSlots.find(s => {
-    const st = new Date(s.startIso).getTime();
-    const en = s.endIso ? new Date(s.endIso).getTime() : Infinity;
-    return nowMs >= st && nowMs < en;
-  }) ?? null;
-  const currentState = active?.state ?? pred.currentState;
-  const currentStateStartIso = active?.startIso ?? new Date(newStartMs).toISOString();
-
-  const target: 'ON' | 'OFF' = currentState === 'ON' ? 'OFF' : 'ON';
-  const nextSlot = newSlots.find(s =>
-    s.state === target && new Date(s.startIso).getTime() > nowMs,
-  ) ?? null;
-  let nextTransition: any = pred.nextTransition;
-  if (nextSlot) {
-    const min = Math.max(0, (new Date(nextSlot.startIso).getTime() - nowMs) / 60_000);
-    nextTransition = {
-      type: target === 'ON' ? 'UTILITY_ON' : 'UTILITY_OFF',
-      earliestTime: nextSlot.startIso,
-      latestTime: nextSlot.startIso,
-      earliestFormatted: fmtYemenTime(nextSlot.startIso),
-      latestFormatted: fmtYemenTime(nextSlot.startIso),
-      minFromNowMin: min,
-      maxFromNowMin: min,
-      rangeLabel: fmtYemenTime(nextSlot.startIso),
-      rangeStartIso: nextSlot.startIso,
-      rangeEndIso: nextSlot.startIso,
-      inRangeWindow: min <= 0,
+      startIso: new Date(stMs).toISOString(),
+      endIso: enMs !== null ? new Date(enMs).toISOString() : null,
     };
   }
 
-  const result: any = {
+  // Determine current state: if now is past the shortened ON end → OFF
+  if (nowMs >= newOnEndMs) {
+    currentState = 'OFF';
+    currentStateStartIso = new Date(newOnEndMs).toISOString();
+  }
+
+  return {
     ...pred,
     daySchedule: newSlots,
     currentState,
     currentStateStartIso,
-    nextTransition,
     reconciledCycleStartIso: currentStateStartIso,
-  };
-  return result as UserPrediction;
+  } as UserPrediction;
 }
-
 // ── V2.3 FIX: Unified Growatt-ON watcher ──────────────────────────────────
 //
 // Subscribes to power_events for UTILITY_ON inserts whenever the user has
@@ -447,30 +430,6 @@ export function useUserPredictions(
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 30_000);
     return () => clearInterval(id);
-  }, []);
-
-  // ── Realtime subscription on resync_history ───────────────────────────
-  // When resolveOffsetsWithGrowatt (in useResyncNotifications) updates a
-  // PENDING_NEGATIVE row to NEGATIVE in the DB, this subscription fires
-  // instantly and bumps the heartbeat tick — causing v21Meta to re-read
-  // resync_history, which flips isPendingNegative to false so the banner
-  // disappears immediately (no 30s delay).
-  useEffect(() => {
-    const channel = supabase
-      .channel(`resync_history_rt_${Math.random().toString(36).slice(2)}`)
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'resync_history' },
-        (payload: any) => {
-          const newRow = payload.new as { offset_state?: string };
-          // Only bump when a PENDING_NEGATIVE row was resolved to NEGATIVE
-          if (newRow.offset_state && newRow.offset_state !== 'PENDING_NEGATIVE') {
-            setTick(t => t + 1);
-          }
-        },
-      )
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
   }, []);
 
   // ── Accuracy write-guard: in-memory + persisted Set ────────────────────
@@ -719,11 +678,7 @@ export function useUserPredictions(
         && (new Date(v21Meta.generatedOn.startIso).getTime() + v21Meta.generatedOn.durationMin * 60_000) > nowV22;
 
       let v21Schedule = (engineResult.daySchedule ?? []) as ShiftedScheduleSlot[];
-      // Always pass generatedOn so applyGeneratedOnToSchedule can inject a
-      // synthetic OFF slot when the Generated ON cycle has ended
-      // (selectedTime > onDuration). When the cycle is still active, the
-      // function injects the synthetic ON slot instead.
-      v21Schedule = applyGeneratedOnToSchedule(v21Schedule, v21Meta.generatedOn, nowV22);
+      v21Schedule = applyGeneratedOnToSchedule(v21Schedule, isGeneratedOnCurrent ? v21Meta.generatedOn : null, nowV22);
       v21Schedule = markEstimatedPendingOffset(v21Schedule, isPendingNegative, nowV22);
 
       const pendingNegativeResolutionIso =
@@ -871,7 +826,17 @@ export function useUserPredictions(
           // elapsed timer — shows |offset| minutes of elapsed immediately.
           reconciledCycleStartIso: userOnStartIso,
           isHoldingState: false,
-          daySchedule: [syntheticOnSlot, ...(v21Result.daySchedule ?? [])],
+          daySchedule: (() => {
+            // Filter out overlapping slots to prevent duplicate ON/OFF display
+            const synStartMs = new Date(syntheticOnSlot.startIso).getTime();
+            const synEndMs = syntheticOnSlot.endIso ? new Date(syntheticOnSlot.endIso).getTime() : Infinity;
+            const filtered = (v21Result.daySchedule ?? []).filter(s => {
+              const sStart = new Date(s.startIso).getTime();
+              const sEnd = s.endIso ? new Date(s.endIso).getTime() : Infinity;
+              return !(sEnd <= synStartMs || sStart >= synEndMs);
+            });
+            return [syntheticOnSlot, ...filtered];
+          })(),
           nextTransition,
           atc: {
             ...v21Result.atc,
@@ -900,7 +865,7 @@ export function useUserPredictions(
           if (!isStale && v21Result.currentState === 'ON' && modeV22 !== 'COMMUNITY_SYNCED') {
             // utility_predictions has updated → backdate ON cycle to entry anchor
             // so elapsed shows the full wait time and remaining = predicted − wait.
-            finalResult = applyUncertainZoneDeduction(v21Result, uncertainEntryRef.current, nowV22);
+            finalResult = applyUncertainZoneDeduction(v21Result, uncertainEntryRef.current, nowV22, offsetMinutes);
           } else if (
             isStale ||
             modeV22 === 'COMMUNITY_SYNCED' ||
