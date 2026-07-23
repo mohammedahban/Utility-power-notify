@@ -71,23 +71,21 @@ function AuthGate() {
   //      covers the cold-start recovery window.
   //    • If `session` is null after loading → go to /login.
   //    • If `session` is set but `profile` is null → wait (do nothing).
-  //      The splash is already hidden at this point, but AuthGate returns
-  //      null so the current route is preserved. This is fine because
-  //      loading only clears *after* fetchProfile() resolves (see
-  //      AuthContext), so this branch is only hit on a profile fetch
-  //      failure — an edge case that won't send the user to the wrong
-  //      screen.
+  //      The native splash stays visible until profile loads too,
+  //      preventing the admin dashboard flash.
   //    • Once profile is loaded → route by role.
   // ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!onboardingChecked || loading) return;
 
+    // Do NOT hide the splash until we have BOTH session state AND profile.
+    // If session exists but profile hasn't loaded yet, keep the splash
+    // visible — otherwise the Stack renders with a stale route (e.g.
+    // /(admin)) before the role-based redirect can fire.
+    if (session && !profile) return;
+
     // Auth state is now definitively known. Hide the native splash screen
-    // so the user sees the correct role-based route. Without this guard,
-    // the splash auto-hides when the JS bundle loads (which can be BEFORE
-    // AuthGate has determined the auth state), briefly exposing whichever
-    // route Expo Router defaulted to — including the admin dashboard for
-    // non-admin users.
+    // so the user sees the correct role-based route.
     if (!splashHiddenRef.current) {
       splashHiddenRef.current = true;
       SplashScreen.hideAsync().catch(() => {});
