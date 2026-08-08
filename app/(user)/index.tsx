@@ -225,8 +225,11 @@ const goStyles = StyleSheet.create({
 // ─────────────────────────────────────────────────────────────────────────────
 function PendingNegativeBanner({ prediction }: { prediction: UserPrediction | null }) {
   const isPending = prediction?.isPendingNegative ?? false;
+  const isGenOnCurrent = prediction?.isGeneratedOnCurrent ?? false;
+  // SPEC-FIX: when a Generated ON is currently active, the pending negative
+  // has already been resolved by the user's report — don't show the banner.
+  if (!isPending || isGenOnCurrent) return null;
   const resolutionIso = prediction?.pendingNegativeResolutionIso ?? null;
-  if (!isPending) return null;
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 1000);

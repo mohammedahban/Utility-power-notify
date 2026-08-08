@@ -163,20 +163,51 @@ function applyGeneratedOnToSchedule(
   }
 
   // Remove post-regen duplicates of the same physical ON (overlap / ±30 min).
-  const cleaned = schedule.filter(s => {
-    if (s.state !== 'ON') return true;
+  // Also handle OFF slots that overlap with the Generated ON:
+  //   - OFF slots entirely within the Generated ON period are removed.
+  //   - OFF slots that start before the Generated ON and end after it starts
+  //     are truncated to end exactly at the Generated ON start.
+  const cleaned = schedule.map(s => {
     const st = new Date(s.startIso).getTime();
     const en = s.endIso ? new Date(s.endIso).getTime() : Infinity;
-    const overlaps = st < endMs && en > startMs;
-    const near = Math.abs(st - startMs) < 30 * 60_000;
-    return !(overlaps || near);
-  });
+
+    if (s.state === 'ON') {
+      // ON slots that overlap with or are near the Generated ON are duplicates
+      const overlaps = st < endMs && en > startMs;
+      const near = Math.abs(st - startMs) < 30 * 60_000;
+      if (overlaps || near) return null;
+    } else if (s.state === 'OFF') {
+      // OFF slot entirely within the Generated ON period → remove it
+      if (st >= startMs && en <= endMs) return null;
+
+      // OFF slot that starts before the Generated ON and ends after it starts
+      // → truncate to end exactly at the Generated ON start
+      if (st < startMs && en > startMs) {
+        const truncatedEndIso = new Date(startMs).toISOString();
+        return {
+          ...s,
+          endIso: truncatedEndIso,
+          endFormatted: fmtYemenTime(truncatedEndIso),
+          shiftedEndFormatted: fmtYemenTime(truncatedEndIso),
+        };
+      }
+
+      // OFF slot that starts within the Generated ON and ends after it
+      // → keep it; anchorOff below will shift it to start at Generated ON end
+    }
+
+    return s;
+  }).filter(Boolean) as ShiftedScheduleSlot[];
 
   // Re-anchor the following OFF (and the chain after it) to the Generated
   // ON's end — full original OFF duration, delta applied to all later slots.
+  // CRITICAL FIX: search from the Generated ON's END (not its START) and only
+  // shift slots that come AFTER the Generated ON in the array. This prevents
+  // an overlapping OFF that was truncated above from being shifted again.
   const anchorOff = (slots: ShiftedScheduleSlot[]): ShiftedScheduleSlot[] => {
-    const offIdx = slots.findIndex(s =>
-      s.state === 'OFF' && new Date(s.startIso).getTime() >= startMs - 60_000,
+    const genOnIdx = slots.findIndex(s => (s as any).isGeneratedOn);
+    const offIdx = slots.findIndex((s, i) =>
+      i > genOnIdx && s.state === 'OFF' && new Date(s.startIso).getTime() >= endMs - 60_000,
     );
     if (offIdx < 0) return slots;
     const offStartMs = new Date(slots[offIdx].startIso).getTime();
@@ -253,11 +284,17 @@ function recomputeMetaAfterScheduleSurgery(
   if (!schedule.length) return {};
 
   // Find the slot that currently contains "now"
-  const activeSlot = schedule.find(s => {
+  const activeSlots = schedule.filter(s => {
     const start = new Date(s.startIso).getTime();
     const end = s.endIso ? new Date(s.endIso).getTime() : Infinity;
     return nowMs >= start && nowMs < end;
   });
+
+  // Prefer the Generated ON slot when it is active — it is the authoritative
+  // current state. Without this, an overlapping legacy OFF slot (e.g. a
+  // nighttime OFF that spans across the Generated ON start) could be picked
+  // first by .find() and corrupt nextTransition / currentState.
+  const activeSlot = activeSlots.find(s => (s as any).isGeneratedOn) ?? activeSlots[0];
 
   const currentState = activeSlot?.state ?? base.currentState;
   const currentStateStartIso = activeSlot?.startIso ?? base.currentStateStartIso;
